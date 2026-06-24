@@ -15,14 +15,17 @@ const TH = {
 };
 window.TH = TH;
 
-// ─── Bottom nav ─────────────────────────────────────────────────────
-function BottomNav({ active, onNav }) {
-  const items = [
-  { id: 'profile', label: 'Profile', icon: Ico.profile, iconActive: Ico.profileFill },
-  { id: 'recent', label: 'Recent', icon: Ico.recent, iconActive: Ico.recent },
-  { id: 'fav', label: 'Favorite', icon: Ico.star, iconActive: Ico.starFill },
-  { id: 'search', label: 'Search', icon: Ico.search, iconActive: Ico.search }];
+// ─── Shared nav items (mobile bottom bar + desktop sidebar read the same list) ──
+const NAV_ITEMS = [
+{ id: 'profile', label: 'Profile', icon: Ico.profile, iconActive: Ico.profileFill },
+{ id: 'recent', label: 'Recent', icon: Ico.recent, iconActive: Ico.recent },
+{ id: 'fav', label: 'Favorite', icon: Ico.star, iconActive: Ico.starFill },
+{ id: 'search', label: 'Search', icon: Ico.search, iconActive: Ico.search }];
+window.NAV_ITEMS = NAV_ITEMS;
 
+// ─── Bottom nav (mobile) ─────────────────────────────────────────────
+function BottomNav({ active, onNav }) {
+  const items = NAV_ITEMS;
   const activeIdx = Math.max(0, items.findIndex((i) => i.id === active));
   return (
     <div style={{
@@ -495,8 +498,8 @@ function SessionsListScreen({ nav, state }) {
 
         })()}
 
-        {/* list */}
-        <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column' }}>
+        {/* list — single column on phones, responsive card grid once there's room for it */}
+        <div style={{ marginTop: 18, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
           {loading && <div style={{ color: TH.dim, padding: '20px 4px', fontSize: 13 }}>Loading sessions…</div>}
           {!loading && sessionsList.length === 0 &&
           <div style={{ color: TH.dim, padding: '20px 4px', fontSize: 13 }}>No sessions match these filters.</div>
@@ -507,11 +510,12 @@ function SessionsListScreen({ nav, state }) {
             const spotsLeft = s.maxPlayers - s.members.length;
             return (
               <button key={s.id} onClick={() => nav.push('sessiondetail', { sessionId: s.id })} style={{
-                background: 'transparent', border: 'none', cursor: 'pointer',
-                padding: '14px 4px', display: 'flex', alignItems: 'center', gap: 14,
-                borderBottom: '1px solid rgba(255,255,255,0.05)',
-                textAlign: 'left'
-              }}>
+                background: TH.card, border: '1px solid rgba(255,255,255,0.06)', borderRadius: 16, cursor: 'pointer',
+                padding: '14px', display: 'flex', alignItems: 'center', gap: 14,
+                textAlign: 'left', transition: 'background .15s, border-color .15s'
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = TH.cardHi; e.currentTarget.style.borderColor = 'rgba(91,92,255,0.35)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = TH.card; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; }}>
                 <div style={{ width: 46, height: 46, borderRadius: 12, overflow: 'hidden', flexShrink: 0 }}>
                   <GameCover game={g} aspect="1" radius={12} />
                 </div>
@@ -526,7 +530,7 @@ function SessionsListScreen({ nav, state }) {
                     Host {host ? host.name : '—'} · {s.platform} · {s.region} · {s.skillLevel}
                   </div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
                   <span style={{
                     fontSize: 11, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
                     color: spotsLeft > 0 ? TH.green : '#FF7B7B'
@@ -840,7 +844,11 @@ function GroupChatPane({ session }) {
   }, [msgs && msgs.length]);
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, alignItems: 'center' }}>
+    {/* Comfortable reading width — a chat thread stretched edge-to-edge across a
+        wide desktop window is harder to read, not easier, so this caps it like a
+        normal messaging app while still being much roomier than the phone layout. */}
+    <div style={{ width: '100%', maxWidth: 820, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '8px 18px', display: 'flex', gap: -6 }}>
         {session.members.slice(0, 5).map((mid) => {
           const m = userById(mid);
@@ -898,6 +906,7 @@ function GroupChatPane({ session }) {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 11l18-8-8 18-2-7-8-3z" fill="#fff" /></svg>
         </button>
       </form>
+    </div>
     </div>);
 
 }
@@ -1299,7 +1308,7 @@ function MyProfileScreen({ nav }) {
       </div>
 
       <div style={{ position: 'absolute', left: 0, right: 0, top: 280, bottom: 88, overflow: 'auto' }}>
-        <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ padding: '14px 18px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
           {list.map((row, i) => {
             const g = gameById(row.gameId);
             return (
@@ -1846,9 +1855,9 @@ function MySessionsScreen({ nav }) {
   };
 
   const Group = ({ title, children, empty }) => (
-    <div style={{ marginBottom: 22 }}>
+    <div style={{ marginBottom: 28 }}>
       <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>{title}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 10 }}>
         {React.Children.count(children) === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>{empty}</div>}
         {children}
       </div>
@@ -1896,10 +1905,20 @@ function StatsDashboardScreen({ nav }) {
         <BackBtn onClick={() => nav.pop()} style={{ marginLeft: -8, marginBottom: 4 }} />
         <h1 style={{ fontSize: 32, fontWeight: 600, color: '#fff', margin: '8px 0 18px', letterSpacing: '-0.02em' }}>Statistics</h1>
 
-        <BarChart title="Posts per month" data={(postsPerMonth || []).map((d) => ({ label: d.month.slice(5), value: d.count }))} color={TH.accent} />
-        <BarChart title="Sessions per game" data={(sessionsPerGame || []).map((d) => ({ label: d.game ? d.game.title : d.gameId, value: d.count }))} color={TH.green} />
-        <BarChart title="Users by platform" data={(usersByPlatform || []).map((d) => ({ label: d.platform, value: d.count }))} color="#FFD43A" />
-        <BarChart title="Join requests by status" data={(requestsByStatus || []).map((d) => ({ label: d.status, value: d.count }))} color="#FF7B7B" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 18, alignItems: 'start' }}>
+          <div style={{ background: TH.card, border: '1px solid rgba(255,255,255,0.06)', borderRadius: 16, padding: 18 }}>
+            <BarChart title="Posts per month" data={(postsPerMonth || []).map((d) => ({ label: d.month.slice(5), value: d.count }))} color={TH.accent} />
+          </div>
+          <div style={{ background: TH.card, border: '1px solid rgba(255,255,255,0.06)', borderRadius: 16, padding: 18 }}>
+            <BarChart title="Sessions per game" data={(sessionsPerGame || []).map((d) => ({ label: d.game ? d.game.title : d.gameId, value: d.count }))} color={TH.green} />
+          </div>
+          <div style={{ background: TH.card, border: '1px solid rgba(255,255,255,0.06)', borderRadius: 16, padding: 18 }}>
+            <BarChart title="Users by platform" data={(usersByPlatform || []).map((d) => ({ label: d.platform, value: d.count }))} color="#FFD43A" />
+          </div>
+          <div style={{ background: TH.card, border: '1px solid rgba(255,255,255,0.06)', borderRadius: 16, padding: 18 }}>
+            <BarChart title="Join requests by status" data={(requestsByStatus || []).map((d) => ({ label: d.status, value: d.count }))} color="#FF7B7B" />
+          </div>
+        </div>
 
         <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10, fontWeight: 600 }}>About these numbers</div>
         <div style={{ columnCount: 2, columnGap: 16, color: TH.dim, fontSize: 11.5, lineHeight: 1.5 }}>

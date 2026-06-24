@@ -11,16 +11,14 @@ const FavCtx = React.createContext({ favGames: [], toggleFavGame: () => {} });
 window.FavCtx = FavCtx;
 
 // ─── Web layout shell ────────────────────────────────────────────────
-// Default render mode: a normal, responsive, centered web app container.
-// No iOS bezel / status bar / dynamic island / home indicator — same
-// screens, same nav, same data layer, just without the phone frame.
-function WebShell({ bg, children }) {
+// Auth screens (login/register) render full-bleed on the page background
+// with no header/sidebar chrome, capped at a normal "login page" width.
+function WebShell({ bg, maxWidth = 1200, children }) {
   return (
-    <div style={{
-      position: 'relative', width: '100%', maxWidth: 1160, minHeight: '100vh',
-      overflow: 'hidden', background: bg,
-    }}>
-      {children}
+    <div style={{ width: '100%', minHeight: '100vh', background: bg }}>
+      <div style={{ position: 'relative', width: '100%', maxWidth, margin: '0 auto', minHeight: '100vh' }}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -29,6 +27,110 @@ window.WebShell = WebShell;
 // Logged-in demo user — switched by LoginScreen via Api.auth.login()
 const UserCtx = React.createContext({ userId: 'menalu', user: null, setUserId: () => {} });
 window.UserCtx = UserCtx;
+
+// ─── Desktop dashboard shell — header + sidebar + main content ───────
+// This is the default layout once a user is logged in: a fixed left
+// sidebar for primary navigation, a top header with brand + the
+// logged-in user, and a main content area that the active screen
+// renders into. Below ~900px wide the sidebar/header hide and the
+// existing mobile BottomNav takes over (see .pu-sidebar/.pu-mobilenav
+// in PartyUp.html), so the same markup works for both.
+const EXTRA_NAV_ITEMS = [
+{ id: 'mysessions', label: 'My Sessions', icon: (s, c) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="9" cy="9" r="3.5" stroke={c} strokeWidth="1.8" /><circle cx="17" cy="10" r="2.5" stroke={c} strokeWidth="1.8" /><path d="M3 19c1-3 3.3-4.5 6-4.5s5 1.5 6 4.5" stroke={c} strokeWidth="1.8" strokeLinecap="round" /></svg> },
+{ id: 'stats', label: 'Statistics', icon: (s, c) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M4 20V10M11 20V4M18 20v-7" stroke={c} strokeWidth="1.8" strokeLinecap="round" /></svg> }];
+
+
+function Sidebar({ active, onNav }) {
+  const rowStyle = (isActive) => ({
+    display: 'flex', alignItems: 'center', gap: 12, width: '100%',
+    background: isActive ? 'rgba(91,92,255,0.16)' : 'transparent',
+    border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer',
+    color: isActive ? '#fff' : TH.dim, fontFamily: 'inherit', fontSize: 14, fontWeight: 600,
+    textAlign: 'left', transition: 'background .15s, color .15s'
+  });
+  return (
+    <div className="pu-sidebar" style={{
+      /* no inline `display` — the .pu-sidebar class owns show/hide per breakpoint
+         in PartyUp.html; an inline display value would always win over the
+         media query and defeat the mobile/desktop toggle. */
+      width: 240, flexShrink: 0, minHeight: '100vh', flexDirection: 'column',
+      borderRight: '1px solid rgba(255,255,255,0.06)', padding: '20px 14px'
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px 22px' }}>
+        <div style={{
+          width: 34, height: 34, borderRadius: 10, flexShrink: 0,
+          background: 'linear-gradient(140deg,#5B5CFF 0%,#7B5CFF 60%,#FF4DBF 100%)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M6.5 8h11c2 0 3.5 1.7 3.5 3.7L20 16c-.2 1.5-1.5 2.5-3 2.5-1 0-1.9-.6-2.4-1.5l-.6-1.2H10l-.6 1.2c-.5.9-1.4 1.5-2.4 1.5-1.5 0-2.8-1-3-2.5L3 11.7C3 9.7 4.5 8 6.5 8z" stroke="#fff" strokeWidth="1.8" />
+          </svg>
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: '#fff', letterSpacing: '-0.02em' }}>Party<span style={{ color: TH.accent }}>Up</span></div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {NAV_ITEMS.map((it) => (
+          <button key={it.id} onClick={() => onNav(it.id)} style={rowStyle(active === it.id)}>
+            {it.icon(20, active === it.id ? '#fff' : TH.dim)}
+            {it.label}
+          </button>
+        ))}
+        <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '10px 4px' }} />
+        {EXTRA_NAV_ITEMS.map((it) => (
+          <button key={it.id} onClick={() => onNav(it.id)} style={rowStyle(active === it.id)}>
+            {it.icon(20, active === it.id ? '#fff' : TH.dim)}
+            {it.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TopHeader({ user }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '14px 22px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0
+    }}>
+      <div className="pu-header-brand" style={{ fontSize: 16, fontWeight: 700, color: '#fff', letterSpacing: '-0.02em' }}>
+        Party<span style={{ color: TH.accent }}>Up</span>
+      </div>
+      {user &&
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ color: '#fff', fontSize: 13, fontWeight: 600 }}>{user.name}</div>
+          <div style={{ color: TH.dim, fontSize: 11 }}>{user.role === 'host' ? 'Host' : 'Player'} · {user.platform}</div>
+        </div>
+        <Avatar name={user.name} size={36} />
+      </div>
+      }
+    </div>);
+
+}
+
+function DesktopShell({ bg, user, active, onNav, routeKey, animation, showMobileNav, children }) {
+  return (
+    <div style={{ width: '100%', minHeight: '100vh', background: bg, display: 'flex' }}>
+      <Sidebar active={active} onNav={onNav} />
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+        <TopHeader user={user} />
+        <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+          <div key={routeKey} style={{ position: 'absolute', inset: 0, animation }}>
+            {children}
+          </div>
+          {showMobileNav &&
+          <div className="pu-mobilenav">
+            <BottomNav active={active} onNav={onNav} />
+          </div>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+window.DesktopShell = DesktopShell;
 
 function App() {
   const [t, setTweak] = useTweaks(DEFAULTS);
@@ -63,17 +165,15 @@ function App() {
     reset: (route, state = {}) => { setNavDir('tab'); setStack([{ route, state }]); },
   }), []);
 
-  const onTab = (id) => {
-    if (id === 'search')  nav.reset('search');
-    if (id === 'profile') nav.reset('profile');
-    if (id === 'recent')  nav.reset('recent');
-    if (id === 'fav')     nav.reset('fav');
-  };
+  // All sidebar/bottom-nav destinations are top-level routes — just reset the stack to them.
+  const onTab = (id) => nav.reset(id);
 
-  // Map route → tab id (for highlighting)
+  // Map route → nav id (for highlighting). The session-creation/browsing flow
+  // is reached from Search, so it stays grouped under the Search tab; My
+  // Sessions and Statistics are their own top-level sidebar destinations.
   const tabFor = (r) => {
-    if (['search','console','sessions','sessiondetail','joined','create','hostlive','mysessions','stats'].includes(r)) return 'search';
-    return r === 'fav' ? 'fav' : r;
+    if (['search','console','sessions','sessiondetail','joined','create','hostlive'].includes(r)) return 'search';
+    return r;
   };
 
   const screen = (() => {
@@ -96,32 +196,33 @@ function App() {
     }
   })();
 
+  const isAuthRoute = ['login', 'register'].includes(top.route);
+  const animation = (navDir === 'push' ? 'slideIn' : navDir === 'pop' ? 'slideInBack' : 'tabSwap') + ' .32s cubic-bezier(.2,.7,.2,1)';
+  // NB: no fill-mode → transform reverts after animation so picker stacking-context is not trapped
+
   return (
     <UserCtx.Provider value={userCtxValue}>
     <FavCtx.Provider value={favCtxValue}>
-    <div style={{
-      minHeight:'100vh', display:'flex', justifyContent:'center',
-      background:`radial-gradient(circle at 30% 0%, #1a2a6e 0%, #0a0e1f 70%)`,
-    }}>
-      <WebShell bg={t.bg}>
-        <div style={{position:'absolute', inset:0, background: t.bg, zIndex:-1}}/>
-        <div style={{position:'absolute', inset:0, background: t.bg}}>
-          {/* The screen, animated on stack change */}
-          <div key={stack.length+':'+top.route} style={{
-            position:'absolute', inset:0,
-            animation: (navDir === 'push'  ? 'slideIn'     : navDir === 'pop' ? 'slideInBack' : 'tabSwap')
-                       + ' .32s cubic-bezier(.2,.7,.2,1)',
-            // NB: no fill-mode → transform reverts after animation so picker stacking-context is not trapped
-          }}>
-            {screen}
-          </div>
-          {!['login','register'].includes(top.route) && (
-            <BottomNav active={tabFor(top.route)} onNav={onTab} />
-          )}
+    {isAuthRoute ? (
+      <WebShell bg={t.bg} maxWidth={460}>
+        <div key={stack.length+':'+top.route} style={{ position:'absolute', inset:0, animation }}>
+          {screen}
         </div>
       </WebShell>
+    ) : (
+      <DesktopShell
+        bg={t.bg}
+        user={userCtxValue.user}
+        active={tabFor(top.route)}
+        onNav={onTab}
+        routeKey={stack.length+':'+top.route}
+        animation={animation}
+        showMobileNav>
+        {screen}
+      </DesktopShell>
+    )}
 
-      <TweaksPanel title="Tweaks">
+    <TweaksPanel title="Tweaks">
         <TweakSection title="Theme">
           <TweakColor label="Accent" value={t.accent} onChange={v=>setTweak('accent', v)}
             options={['#5B5CFF','#FF4757','#3FD16A','#FFB13A','#E347FF']}/>
@@ -154,7 +255,6 @@ function App() {
           </div>
         </TweakSection>
       </TweaksPanel>
-    </div>
     </FavCtx.Provider>
     </UserCtx.Provider>
   );
