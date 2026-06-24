@@ -38,7 +38,7 @@ function BottomNav({ active, onNav }) {
         {items.map((it, idx) => {
           const isActive = idx === activeIdx;
           return (
-            <button key={it.id} onClick={() => onNav(it.id)} style={{
+            <button key={it.id} onClick={() => onNav(it.id)} aria-label={it.label} style={{
               background: 'none', border: 'none', padding: '8px 0', cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               position: 'relative'
@@ -112,13 +112,16 @@ window.Slide = Slide;
 // ════════════════════════════════════════════════════════════════════
 function SearchScreen({ nav }) {
   const [q, setQ] = React.useState('');
-  const filtered = GAMES.filter((g) => (g.title + ' ' + g.sub).toLowerCase().includes(q.toLowerCase()));
+  const { userId } = React.useContext(window.UserCtx);
+  // Games list comes through jQuery $.ajax inside Api.games.list (spec section 20)
+  const { data: filtered } = useApi(() => Api.games.list({ q }), [q]);
+  const { data: feedPosts } = useApi(() => Api.posts.listFeedForUser(userId), [userId]);
   return (
     <ScreenScroll>
       <div style={{ padding: '24px 26px 16px' }}>
         <h1 style={{
           fontSize: 36, fontWeight: 600, color: TH.text, margin: '8px 0 28px',
-          lineHeight: 1.1, letterSpacing: '-0.02em'
+          lineHeight: 1.1, letterSpacing: '-0.02em', textShadow: '0 4px 24px rgba(0,0,0,0.4)'
         }}>What are you<br />playing today?</h1>
         <div style={{
           display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px',
@@ -137,22 +140,51 @@ function SearchScreen({ nav }) {
           
         </div>
         <div style={{ marginTop: 30, fontSize: 18, fontWeight: 600, color: TH.text }}>
-          {q ? `Results (${filtered.length})` : 'Popular games'}
+          {q ? `Results (${(filtered || []).length})` : 'Popular games'}
         </div>
         <div style={{
           marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10
         }}>
-          {filtered.slice(0, 12).map((g) =>
+          {(filtered || []).slice(0, 12).map((g) =>
           <button key={g.id} onClick={() => nav.push('console', { gameId: g.id })} className="game-tile">
               <GameCover game={g} aspect="1" />
             </button>
           )}
-          {filtered.length === 0 &&
+          {filtered && filtered.length === 0 &&
           <div style={{ gridColumn: '1/-1', textAlign: 'center', color: TH.dim, padding: '40px 0' }}>
               No games match “{q}”
             </div>
           }
         </div>
+
+        {/* Home feed — posts from joined sessions, favorite games, and public sessions (spec 9.3 / 14) */}
+        {!q &&
+        <div style={{ marginTop: 32 }}>
+          <div style={{ fontSize: 18, fontWeight: 600, color: TH.text, marginBottom: 12 }}>Your feed</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {(feedPosts || []).length === 0 && <div style={{ color: TH.dim, fontSize: 13 }}>No posts yet — join a session to see activity here.</div>}
+            {(feedPosts || []).slice(0, 8).map((p) => {
+              const author = userById(p.authorId);
+              const session = SESSIONS.find((s) => s.id === p.sessionId);
+              return (
+                <button key={p.id} onClick={() => session && nav.push('sessiondetail', { sessionId: session.id })} style={{
+                  background: TH.card, border: 'none', borderRadius: 14, padding: 14,
+                  textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Avatar name={author ? author.name : '?'} size={32} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ color: '#fff', fontWeight: 600, fontSize: 13 }}>{author ? author.name : 'Unknown'}</div>
+                      <div style={{ color: TH.dim2, fontSize: 11 }}>{session ? session.title : ''} · {p.createdAt}</div>
+                    </div>
+                  </div>
+                  <div style={{ color: '#fff', fontSize: 13.5, marginTop: 8, lineHeight: 1.45 }}>{p.content}</div>
+                </button>);
+
+            })}
+          </div>
+        </div>
+        }
       </div>
     </ScreenScroll>);
 
@@ -228,7 +260,7 @@ function ConsoleScreen({ nav, state }) {
         </div>
 
         <div style={{ marginTop: 30, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <button onClick={() => nav.push('hostjoin', { gameId: game.id, intent: 'join', mode, region })} style={{
+          <button onClick={() => nav.push('sessions', { gameId: game.id, intent: 'join', mode, region })} style={{
             background: TH.accent, border: 'none', borderRadius: 16, color: '#fff',
             padding: '18px', fontSize: 17, fontWeight: 600, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -360,29 +392,31 @@ function PickerSheet({ title, options, value, onPick, onClose }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// HOST/JOIN — choose Duo or Squad
+// SESSIONS LIST — advanced search across game/platform/region/skill/mode/availability (spec 9.7 / 12.1)
 // ════════════════════════════════════════════════════════════════════
-function HostJoinScreen({ nav, state }) {
+function SessionsListScreen({ nav, state }) {
   const [groupMode, setGroupMode] = React.useState('duo'); // 'duo' | 'squad'
-  const [sortBy, setSortBy] = React.useState('favorite'); // 'favorite' | 'connection' | 'hours'
-  const [sortDir, setSortDir] = React.useState('desc'); // 'asc' | 'desc'
+  const [sortBy, setSortBy] = React.useState('recent'); // 'recent' | 'open'
   const [filterOpen, setFilterOpen] = React.useState(false);
+  const [platform, setPlatform] = React.useState('');
+  const [region, setRegion] = React.useState('');
+  const [skillLevel, setSkillLevel] = React.useState('');
   const game = gameById(state.gameId);
-  const rankColor = (r) => r === 'pro' ? TH.green : r === 'amateur' ? '#FFD43A' : '#7AC4FF';
 
-  const players = React.useMemo(() => {
-    const list = [...(groupMode === 'duo' ? PLAYERS_DUO : PLAYERS_SQUAD)];
-    const cmp = (a, b) => {
-      let av, bv;
-      if (sortBy === 'favorite') {av = a.fav ? 1 : 0;bv = b.fav ? 1 : 0;} else
-      if (sortBy === 'connection') {av = a.ping;bv = b.ping;} else
-        /* hours */{av = a.hours;bv = b.hours;}
-      return sortDir === 'asc' ? av - bv : bv - av;
-    };
-    return list.sort(cmp);
-  }, [groupMode, sortBy, sortDir]);
+  const { data: sessionList, loading } = useApi(
+    () => Api.sessions.list({ gameId: state.gameId, mode: groupMode, platform, region, skillLevel }),
+    [state.gameId, groupMode, platform, region, skillLevel]
+  );
 
-  const SORT_LABEL = { favorite: 'Favorites', connection: 'Connection', hours: 'Time spent' };
+  const sessionsList = React.useMemo(() => {
+    const list = [...(sessionList || [])];
+    if (sortBy === 'recent') list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    else list.sort((a, b) => (b.maxPlayers - b.members.length) - (a.maxPlayers - a.members.length));
+    return list;
+  }, [sessionList, sortBy]);
+
+  const SORT_LABEL = { recent: 'Most recent', open: 'Most open spots' };
+  const activeFilters = [platform, region, skillLevel].filter(Boolean).length;
 
   return (
     <ScreenScroll style={{ paddingTop: 50 }}>
@@ -393,32 +427,37 @@ function HostJoinScreen({ nav, state }) {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
           <div style={{ flex: 1 }}>
             <h1 style={{ fontSize: 36, fontWeight: 600, margin: '8px 0 8px', color: TH.text, lineHeight: 1.05, letterSpacing: '-0.02em' }}>
-              Find your<br />partner
+              Find a<br />session
             </h1>
             <div style={{ fontSize: 13, color: TH.dim, marginBottom: 18 }}>
-              {game.sub ? game.sub + ' ' : ''}{game.title}
+              {game ? (game.sub ? game.sub + ' ' : '') + game.title : 'All games'}
             </div>
           </div>
+          <button onClick={() => nav.push('create', { gameId: state.gameId })} style={{
+            marginTop: 14, background: TH.accent, border: 'none', borderRadius: 99,
+            width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', boxShadow: '0 8px 20px rgba(91,92,255,0.4)', flexShrink: 0
+          }} aria-label="Create session">{Ico.plus(20, '#fff')}</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
           <button
-            onClick={() => setFilterOpen(true)}
+            onClick={() => setSortBy(sortBy === 'recent' ? 'open' : 'recent')}
             style={{
-              marginTop: 14, background: 'rgba(255,255,255,0.06)',
-              border: '1px solid rgba(255,255,255,0.1)', borderRadius: 99,
-              padding: '8px 12px 8px 10px', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: 6, color: '#fff',
-              fontSize: 12, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
-              transition: 'background .15s'
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(91,92,255,0.2)'}
-            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}>
-            
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M4 6h16M7 12h10M10 18h4" stroke="#fff" strokeWidth="2" strokeLinecap="round" />
-            </svg>
+              background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 99,
+              padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+              color: '#fff', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap'
+            }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M7 12h10M10 18h4" stroke="#fff" strokeWidth="2" strokeLinecap="round" /></svg>
             {SORT_LABEL[sortBy]}
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" style={{ transition: 'transform .25s', transform: sortDir === 'asc' ? 'rotate(180deg)' : 'none' }}>
-              <path d="M6 9l6 6 6-6" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+          </button>
+          <button onClick={() => setFilterOpen(true)} style={{
+            background: activeFilters ? 'rgba(91,92,255,0.22)' : 'rgba(255,255,255,0.06)',
+            border: '1px solid ' + (activeFilters ? 'rgba(91,92,255,0.5)' : 'rgba(255,255,255,0.1)'), borderRadius: 99,
+            padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+            color: '#fff', fontSize: 12, fontWeight: 600, fontFamily: 'inherit'
+          }}>
+            Filters{activeFilters ? ` (${activeFilters})` : ''}
           </button>
         </div>
 
@@ -458,73 +497,85 @@ function HostJoinScreen({ nav, state }) {
 
         {/* list */}
         <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column' }}>
-          {players.map((p, i) =>
-          <button key={p.id} onClick={() => nav.push('player', { playerId: p.id, mode: groupMode })} style={{
-            background: 'transparent', border: 'none', cursor: 'pointer',
-            padding: '14px 4px', display: 'flex', alignItems: 'center', gap: 14,
-            borderBottom: '1px solid rgba(255,255,255,0.05)',
-            textAlign: 'left'
-          }}>
-              {groupMode === 'duo' ?
-            <Avatar name={p.name} size={46} /> :
+          {loading && <div style={{ color: TH.dim, padding: '20px 4px', fontSize: 13 }}>Loading sessions…</div>}
+          {!loading && sessionsList.length === 0 &&
+          <div style={{ color: TH.dim, padding: '20px 4px', fontSize: 13 }}>No sessions match these filters.</div>
+          }
+          {sessionsList.map((s) => {
+            const host = userById(s.hostId);
+            const g = gameById(s.gameId);
+            const spotsLeft = s.maxPlayers - s.members.length;
+            return (
+              <button key={s.id} onClick={() => nav.push('sessiondetail', { sessionId: s.id })} style={{
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                padding: '14px 4px', display: 'flex', alignItems: 'center', gap: 14,
+                borderBottom: '1px solid rgba(255,255,255,0.05)',
+                textAlign: 'left'
+              }}>
+                <div style={{ width: 46, height: 46, borderRadius: 12, overflow: 'hidden', flexShrink: 0 }}>
+                  <GameCover game={g} aspect="1" radius={12} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: '#fff', fontSize: 15, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {s.title}
+                    {s.privacy === 'private' &&
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style={{ opacity: 0.6, flexShrink: 0 }}><rect x="5" y="11" width="14" height="9" rx="2" stroke="#fff" strokeWidth="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="#fff" strokeWidth="2" /></svg>
+                    }
+                  </div>
+                  <div style={{ color: TH.dim, fontSize: 12, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    Host {host ? host.name : '—'} · {s.platform} · {s.region} · {s.skillLevel}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                    color: spotsLeft > 0 ? TH.green : '#FF7B7B'
+                  }}>{s.members.length}/{s.maxPlayers}</span>
+                  {Ico.chevron(16, '#fff')}
+                </div>
+              </button>);
 
-            <div style={{
-              width: 46, height: 46, borderRadius: '50%',
-              background: 'rgba(91,92,255,0.18)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#fff', fontWeight: 700,
-              boxShadow: 'inset 0 0 0 1px rgba(91,92,255,0.4)'
-            }}>{p.members}/{p.max}</div>
-            }
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: '#fff', fontSize: 16, fontWeight: 600 }}>{p.name}</div>
-                <div style={{ color: TH.dim, fontSize: 13, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.bio}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                {sortBy === 'connection' &&
-              <span style={{
-                fontSize: 11, color: p.ping < 40 ? TH.green : p.ping < 90 ? '#FFD43A' : '#FF7B7B',
-                fontVariantNumeric: 'tabular-nums', fontWeight: 600
-              }}>{p.ping}ms</span>
-              }
-                {sortBy === 'hours' &&
-              <span style={{
-                fontSize: 11, color: TH.dim, fontVariantNumeric: 'tabular-nums', fontWeight: 600
-              }}>{p.hours}h</span>
-              }
-                {p.fav && Ico.starFill(16)}
-                {Ico.signal(18, rankColor(p.rank))}
-              </div>
-            </button>
-          )}
+          })}
         </div>
       </div>
 
       {filterOpen &&
-      <FilterSortSheet
-        sortBy={sortBy} sortDir={sortDir}
-        onChange={(by, dir) => {setSortBy(by);setSortDir(dir);}}
+      <SessionFilterSheet
+        platform={platform} region={region} skillLevel={skillLevel}
+        onChange={(next) => { setPlatform(next.platform); setRegion(next.region); setSkillLevel(next.skillLevel); }}
         onClose={() => setFilterOpen(false)} />
-
       }
     </ScreenScroll>);
 
 }
-window.HostJoinScreen = HostJoinScreen;
+window.SessionsListScreen = SessionsListScreen;
 
-// Filter / sort sheet for the Find-your-partner screen
-function FilterSortSheet({ sortBy, sortDir, onChange, onClose }) {
-  const OPTIONS = [
-  { id: 'favorite', label: 'Favorite',
-    ascLabel: 'Non-favorites first', descLabel: 'Favorites first',
-    icon: <svg width="18" height="18" viewBox="0 0 24 24"><path d="M12 3l2.9 6 6.6.9-4.8 4.6 1.2 6.6L12 18l-5.9 3.1L7.3 14.5 2.5 9.9 9.1 9z" fill="#FFD43A" /></svg> },
-  { id: 'connection', label: 'By connection',
-    ascLabel: 'Best ping first', descLabel: 'Worst ping first',
-    icon: <svg width="18" height="18" viewBox="0 0 24 24"><rect x="2" y="14" width="3.5" height="6" rx="1" fill="#3FD16A" /><rect x="7.5" y="10" width="3.5" height="10" rx="1" fill="#3FD16A" /><rect x="13" y="6" width="3.5" height="14" rx="1" fill="#3FD16A" /><rect x="18.5" y="2" width="3.5" height="18" rx="1" fill="#3FD16A" /></svg> },
-  { id: 'hours', label: 'By time spent',
-    ascLabel: 'Least hours first', descLabel: 'Most hours first',
-    icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#7AC4FF" strokeWidth="2" /><path d="M12 7v5l3 2" stroke="#7AC4FF" strokeWidth="2" strokeLinecap="round" /></svg> }];
-
+// Advanced search sheet — platform / region / skill level (3+ parameters, spec 12.1)
+function SessionFilterSheet({ platform, region, skillLevel, onChange, onClose }) {
+  const PLATFORMS = ['PC', 'PlayStation', 'Xbox', 'Switch', 'Mobile'];
+  const REGIONS = ['Israel', 'Europe', 'NA', 'Asia'];
+  const SKILLS = ['Beginner', 'Intermediate', 'Advanced'];
+  const Row = ({ label, options, value, onPick }) => (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 11, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, fontWeight: 600 }}>{label}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <button onClick={() => onPick('')} style={{
+          background: !value ? 'rgba(91,92,255,0.22)' : 'rgba(255,255,255,0.04)',
+          border: '1px solid ' + (!value ? 'rgba(91,92,255,0.55)' : 'rgba(255,255,255,0.08)'),
+          color: '#fff', borderRadius: 99, padding: '8px 14px', fontSize: 12.5, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit'
+        }}>Any</button>
+        {options.map((opt) =>
+        <button key={opt} onClick={() => onPick(opt)} style={{
+          background: value === opt ? 'rgba(91,92,255,0.22)' : 'rgba(255,255,255,0.04)',
+          border: '1px solid ' + (value === opt ? 'rgba(91,92,255,0.55)' : 'rgba(255,255,255,0.08)'),
+          color: '#fff', borderRadius: 99, padding: '8px 14px', fontSize: 12.5, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit'
+        }}>{opt}</button>
+        )}
+      </div>
+    </div>
+  );
   return (
     <div onClick={onClose} style={{
       position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)',
@@ -538,284 +589,327 @@ function FilterSortSheet({ sortBy, sortDir, onChange, onClose }) {
         animation: 'sheetUp .28s cubic-bezier(.2,.7,.2,1) both',
         display: 'flex', flexDirection: 'column'
       }}>
-        <div style={{
-          width: 40, height: 4, borderRadius: 99, background: 'rgba(255,255,255,0.25)',
-          margin: '0 auto 14px'
-        }} />
+        <div style={{ width: 40, height: 4, borderRadius: 99, background: 'rgba(255,255,255,0.25)', margin: '0 auto 14px' }} />
         <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', textAlign: 'center', marginBottom: 14 }}>
-          Sort players
+          Filter sessions
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {OPTIONS.map((opt) => {
-            const active = sortBy === opt.id;
-            return (
-              <div key={opt.id} style={{
-                background: active ? 'rgba(91,92,255,0.16)' : 'rgba(255,255,255,0.04)',
-                border: '1px solid ' + (active ? 'rgba(91,92,255,0.4)' : 'rgba(255,255,255,0.06)'),
-                borderRadius: 14, padding: '12px 14px',
-                display: 'flex', alignItems: 'center', gap: 12,
-                transition: 'background .18s, border-color .18s'
-              }}>
-                <div style={{
-                  width: 34, height: 34, borderRadius: 10, background: 'rgba(255,255,255,0.05)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
-                }}>{opt.icon}</div>
-                <button
-                  onClick={() => onChange(opt.id, active ? sortDir : 'desc')}
-                  style={{
-                    flex: 1, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
-                    color: '#fff', fontFamily: 'inherit', padding: 0
-                  }}>
-                  <div style={{ fontSize: 15, fontWeight: 600 }}>{opt.label}</div>
-                  <div style={{ fontSize: 11, color: TH.dim, marginTop: 2 }}>
-                    {sortDir === 'asc' ? opt.ascLabel : opt.descLabel}
-                  </div>
-                </button>
-                {/* Asc/Desc toggle */}
-                <div style={{
-                  display: 'flex', borderRadius: 99, padding: 3,
-                  background: 'rgba(0,0,0,0.25)'
-                }}>
-                  {[['asc', '↑'], ['desc', '↓']].map(([dir, arrow]) => {
-                    const on = active && sortDir === dir;
-                    return (
-                      <button key={dir} onClick={() => onChange(opt.id, dir)} style={{
-                        background: on ? TH.accent : 'transparent',
-                        color: '#fff',
-                        border: 'none', cursor: 'pointer',
-                        width: 30, height: 28, borderRadius: 99,
-                        fontSize: 16, fontWeight: 700, fontFamily: 'inherit',
-                        transition: 'background .15s',
-                        opacity: on ? 1 : 0.55
-                      }}>{arrow}</button>);
-
-                  })}
-                </div>
-              </div>);
-
-          })}
-        </div>
+        <Row label="Platform" options={PLATFORMS} value={platform} onPick={(v) => onChange({ platform: v, region, skillLevel })} />
+        <Row label="Region" options={REGIONS} value={region} onPick={(v) => onChange({ platform, region: v, skillLevel })} />
+        <Row label="Skill level" options={SKILLS} value={skillLevel} onPick={(v) => onChange({ platform, region, skillLevel: v })} />
         <button onClick={onClose} style={{
-          marginTop: 14, background: 'transparent', color: '#fff', border: 'none',
-          padding: '12px', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-          opacity: 0.7
-        }}>Done</button>
+          marginTop: 4, background: TH.accent, color: '#fff', border: 'none',
+          padding: '14px', borderRadius: 14, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
+        }}>Show results</button>
       </div>
     </div>);
 
 }
 
 // ════════════════════════════════════════════════════════════════════
-// PLAYER PROFILE — Bruce Green style, tabs Join game / Game stats
+// SESSION DETAILS — Details / Members / Chat tabs (spec 9.8 + 9.13)
 // ════════════════════════════════════════════════════════════════════
-function PlayerScreen({ nav, state }) {
-  const [tab, setTab] = React.useState('join');
-  const p = PLAYERS_DUO.find((x) => x.id === state.playerId) || PLAYERS_DUO[0];
-  const [fav, setFav] = React.useState(!!p.fav);
+function SessionDetailScreen({ nav, state }) {
+  const [tab, setTab] = React.useState('details');
+  const [refreshKey, setRefreshKey] = React.useState(0);
+  const [requestMsg, setRequestMsg] = React.useState('');
+  const { userId } = React.useContext(window.UserCtx);
+
+  const { data: session, loading } = useApi(() => Api.sessions.get(state.sessionId), [state.sessionId, refreshKey]);
+  const { data: requests } = useApi(() => Api.requests.listForUser(userId), [userId, refreshKey]);
+  const { data: posts } = useApi(() => session ? Api.posts.listForSession(session.id) : Promise.resolve([]), [session && session.id, refreshKey]);
+
+  if (loading || !session) {
+    return <ScreenScroll><div style={{ padding: '70px 26px', color: TH.dim }}>Loading session…</div></ScreenScroll>;
+  }
+
+  const game = gameById(session.gameId);
+  const host = userById(session.hostId);
+  const isHost = session.hostId === userId;
+  const isMember = session.members.includes(userId);
+  const myRequest = (requests || []).find((r) => r.sessionId === session.id);
+  const full = session.members.length >= session.maxPlayers;
+  const refresh = () => setRefreshKey((k) => k + 1);
+
+  const join = () => Api.sessions.join(session.id).then(() => { refresh(); nav.push('joined', { sessionId: session.id }); });
+  const sendRequest = () => Api.requests.create({ sessionId: session.id, message: requestMsg }).then(() => { setRequestMsg(''); refresh(); });
+  const leave = () => Api.sessions.leave(session.id).then(() => { refresh(); nav.pop(); });
 
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
       <div style={{ padding: '54px 18px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <BackBtn onClick={() => nav.pop()} style={{ marginLeft: -8 }} />
-        <button onClick={() => setFav((f) => !f)} style={{
-          background: 'none', border: 'none', cursor: 'pointer', padding: 6
-        }}>{fav ? Ico.starFill(28) : Ico.star(28, '#fff')}</button>
+        {isHost && (
+          <button onClick={() => nav.push('hostlive', { sessionId: session.id })} style={{
+            background: 'rgba(91,92,255,0.2)', color: '#fff', border: 'none',
+            padding: '8px 14px', borderRadius: 99, fontSize: 13, fontWeight: 600,
+            cursor: 'pointer', fontFamily: 'inherit'
+          }}>Manage</button>
+        )}
       </div>
 
-      {/* Profile header */}
+      {/* Session header */}
       <div style={{ padding: '8px 26px 0', display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-        <Avatar name={p.name} size={86} />
-        <div style={{ flex: 1, minWidth: 0, paddingTop: 6 }}>
-          <div style={{ fontSize: 26, fontWeight: 700, color: '#fff', lineHeight: 1.1, letterSpacing: '-0.01em' }}>{p.name}</div>
-          <div style={{ fontSize: 22, marginTop: 4 }}>{p.flag}</div>
-          <div style={{ fontSize: 13, color: TH.dim, marginTop: 6, lineHeight: 1.4 }}>{p.about}</div>
+        <div style={{ width: 72, height: 72, borderRadius: 14, overflow: 'hidden', flexShrink: 0 }}>
+          <GameCover game={game} aspect="1" radius={14} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0, paddingTop: 2 }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#fff', lineHeight: 1.15, letterSpacing: '-0.01em' }}>{session.title}</div>
+          <div style={{ fontSize: 13, color: TH.dim, marginTop: 4 }}>
+            Hosted by {host ? host.name : '—'} · {session.platform} · {session.region}
+          </div>
+          <div style={{ fontSize: 13, color: TH.dim, marginTop: 2 }}>
+            {session.mode} · {session.skillLevel} · {session.privacy === 'private' ? 'Private' : 'Public'} · {session.members.length}/{session.maxPlayers}
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div style={{
-        marginTop: 22, padding: '0 26px',
-        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', position: 'relative'
-      }}>
-        {[['join', 'Join'], ['stats', 'Stats'], ['message', 'Message']].map(([k, label]) =>
+      <div style={{ marginTop: 18, padding: '0 26px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', position: 'relative' }}>
+        {[['details', 'Details'], ['members', 'Members'], ['chat', 'Chat']].map(([k, label]) =>
         <button key={k} onClick={() => setTab(k)} style={{
           background: 'none', border: 'none', cursor: 'pointer',
           padding: '14px 0', color: tab === k ? '#fff' : TH.dim,
-          fontSize: 16, fontWeight: 600, fontFamily: 'inherit',
-          position: 'relative'
+          fontSize: 16, fontWeight: 600, fontFamily: 'inherit', position: 'relative'
         }}>
             {label}
-            <div style={{
-            position: 'absolute', left: '50%', transform: 'translateX(-50%)',
-            bottom: 0, height: 2, width: tab === k ? '60%' : '0%',
-            background: '#fff', transition: 'width .24s'
-          }} />
+            <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 0, height: 2, width: tab === k ? '60%' : '0%', background: '#fff', transition: 'width .24s' }} />
           </button>
         )}
         <div style={{ position: 'absolute', left: 26, right: 26, bottom: 0, height: 1, background: 'rgba(255,255,255,0.08)' }} />
       </div>
 
       {/* Tab content */}
-      <div style={{ position: 'absolute', left: 0, right: 0, top: 300, bottom: 88, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        {tab === 'join' ?
-        <div style={{ padding: '18px 26px', display: 'flex', flexDirection: 'column', alignItems: 'center', overflow: 'auto' }}>
-            <div style={{ fontSize: 22, fontWeight: 600, color: '#fff', alignSelf: 'flex-start' }}>Scan QR code to join:</div>
-            <div style={{ marginTop: 18 }}>
-              <QRCode size={240} payload={`partyup://join/${p.id}`} />
+      <div style={{ position: 'absolute', left: 0, right: 0, top: 270, bottom: isMember || tab !== 'chat' ? 88 : 88, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        {tab === 'details' &&
+        <ScreenScroll style={{ position: 'static', paddingTop: 0, paddingBottom: 0 }}>
+          <div style={{ padding: '18px 26px 90px' }}>
+            <div style={{ color: TH.dim, fontSize: 14, lineHeight: 1.5 }}>{session.description}</div>
+
+            {/* React <video> requirement — game intro / session trailer */}
+            <div style={{ marginTop: 18, borderRadius: 14, overflow: 'hidden' }}>
+              <video
+                controls muted playsInline poster=""
+                style={{ width: '100%', display: 'block', background: '#000', borderRadius: 14 }}
+                src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">
+              </video>
+              <div style={{ color: TH.dim2, fontSize: 11, marginTop: 6 }}>Game intro preview</div>
             </div>
-            <button onClick={() => nav.push('joined', { playerId: p.id })} style={{
-            marginTop: 18, background: TH.accent, color: '#fff', border: 'none',
-            padding: '14px 28px', borderRadius: 99, fontSize: 15, fontWeight: 600,
-            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
-            boxShadow: '0 10px 24px rgba(91,92,255,0.4)', fontFamily: 'inherit'
-          }}>
-              {Ico.users(18, '#fff')} Join lobby directly
-            </button>
-          </div> :
-        tab === 'stats' ?
-        <div style={{ padding: '18px 26px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {[
-          { game: 'valorant', winrate: 62, kd: 1.34, rank: 'Diamond II' },
-          { game: 'cs', winrate: 58, kd: 1.21, rank: 'Supreme' },
-          { game: 'apex', winrate: 71, kd: 2.05, rank: 'Predator' }].
-          map((s) => {
-            const g = gameById(s.game);
-            return (
-              <div key={s.game} style={{
-                background: TH.card, borderRadius: 14, padding: 14,
-                display: 'flex', alignItems: 'center', gap: 14
-              }}>
-                  <div style={{ width: 72, aspectRatio: '16/10', flexShrink: 0, borderRadius: 10, overflow: 'hidden' }}>
-                    <GameCover game={g} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ color: '#fff', fontWeight: 600 }}>{g.sub ? g.sub + ' ' : ''}{g.title}</div>
-                    <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{s.rank}</div>
-                    <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 12, color: '#fff' }}>
-                      <span><b>{s.winrate}%</b> <span style={{ color: TH.dim }}>WR</span></span>
-                      <span><b>{s.kd}</b> <span style={{ color: TH.dim }}>K/D</span></span>
+
+            {/* Join / request action */}
+            <div style={{ marginTop: 18 }}>
+              {isHost ? null :
+              isMember ?
+              <button onClick={leave} style={{
+                width: '100%', background: 'rgba(255,107,107,0.12)', color: '#FF8080',
+                border: '1px solid rgba(255,107,107,0.35)', padding: '14px', borderRadius: 14,
+                fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
+              }}>Leave session</button> :
+              session.privacy === 'public' ?
+              <button disabled={full} onClick={join} style={{
+                width: '100%', background: full ? 'rgba(255,255,255,0.1)' : TH.accent, color: '#fff', border: 'none',
+                padding: '14px', borderRadius: 14, fontSize: 15, fontWeight: 600,
+                cursor: full ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+                boxShadow: full ? 'none' : '0 10px 26px rgba(91,92,255,0.35)'
+              }}>{full ? 'Session is full' : 'Join session'}</button> :
+              myRequest && myRequest.status === 'pending' ?
+              <div style={{ textAlign: 'center', color: TH.dim, fontSize: 13, padding: '14px' }}>Join request pending host approval.</div> :
+              <div>
+                {myRequest && myRequest.status === 'rejected' &&
+                <div style={{ color: '#FF8080', fontSize: 12, marginBottom: 8 }}>Your last request was rejected — you can send a new one.</div>
+                }
+                <textarea value={requestMsg} onChange={(e) => setRequestMsg(e.target.value)} rows={2}
+                  placeholder="Add a short message to the host (optional)"
+                  style={{ width: '100%', boxSizing: 'border-box', background: TH.card, border: '1px solid rgba(255,255,255,0.08)', color: '#fff', padding: 12, borderRadius: 12, fontSize: 14, resize: 'none', fontFamily: 'inherit', outline: 'none' }} />
+                <button onClick={sendRequest} style={{
+                  width: '100%', marginTop: 10, background: TH.accent, color: '#fff', border: 'none',
+                  padding: '14px', borderRadius: 14, fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+                  boxShadow: '0 10px 26px rgba(91,92,255,0.35)'
+                }}>Request to join</button>
+              </div>
+              }
+            </div>
+
+            {/* Posts feed for this session */}
+            <div style={{ marginTop: 26, fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>Posts</div>
+            {isMember &&
+            <SessionPostComposer sessionId={session.id} onPosted={refresh} />
+            }
+            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {(posts || []).length === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>No posts yet.</div>}
+              {(posts || []).map((p) => <PostCard key={p.id} post={p} onChanged={refresh} />)}
+            </div>
+          </div>
+        </ScreenScroll>
+        }
+
+        {tab === 'members' &&
+        <ScreenScroll style={{ position: 'static', paddingTop: 0, paddingBottom: 0 }}>
+          <div style={{ padding: '18px 26px 90px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {session.members.map((mid) => {
+              const m = userById(mid);
+              if (!m) return null;
+              return (
+                <div key={mid} style={{ background: TH.card, borderRadius: 14, padding: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <Avatar name={m.name} size={42} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: '#fff', fontWeight: 600, fontSize: 14 }}>
+                      {m.name} {mid === session.hostId && <span style={{ color: TH.dim, fontWeight: 500 }}>· Host</span>}
                     </div>
+                    <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{m.platform} · {m.region}</div>
                   </div>
+                  <SkillBadgeCanvas skillLevel={m.skillLevel} size={38} />
                 </div>);
 
-          })}
-          </div> :
+            })}
+          </div>
+        </ScreenScroll>
+        }
 
-        <ChatPane player={p} />
+        {tab === 'chat' &&
+        (isMember ?
+        <GroupChatPane session={session} /> :
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: TH.dim, fontSize: 13, padding: '0 40px', textAlign: 'center' }}>
+          Join this session to unlock group chat.
+        </div>)
         }
       </div>
     </div>);
 
 }
-window.PlayerScreen = PlayerScreen;
+window.SessionDetailScreen = SessionDetailScreen;
 
-// ─── Inline chat pane (Message tab) ────────────────────────────────
-function ChatPane({ player }) {
-  const seedMessages = [
-  { from: 'them', text: 'Hey! Looking to duo?', t: '10:41' },
-  { from: 'me', text: 'Yeah, what rank are you?', t: '10:42' },
-  { from: 'them', text: player.rank === 'pro' ? "Diamond II. You?" : "Gold. Just having fun. You?", t: '10:42' }];
+// ─── Inline post composer + card (session Details tab) ─────────────
+function SessionPostComposer({ sessionId, onPosted }) {
+  const [text, setText] = React.useState('');
+  const submit = () => {
+    const v = text.trim();
+    if (!v) return;
+    Api.posts.create({ sessionId, content: v }).then(() => { setText(''); onPosted(); });
+  };
+  return (
+    <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+      <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a post for this session…"
+        style={{ flex: 1, background: TH.card, border: '1px solid rgba(255,255,255,0.08)', color: '#fff', padding: '11px 14px', borderRadius: 99, fontSize: 13.5, fontFamily: 'inherit', outline: 'none' }} />
+      <button onClick={submit} disabled={!text.trim()} style={{
+        background: text.trim() ? TH.accent : 'rgba(255,255,255,0.08)', border: 'none', color: '#fff',
+        borderRadius: 99, padding: '0 16px', fontSize: 13, fontWeight: 600, cursor: text.trim() ? 'pointer' : 'default', fontFamily: 'inherit'
+      }}>Post</button>
+    </div>);
 
-  const [msgs, setMsgs] = React.useState(seedMessages);
+}
+function PostCard({ post, onChanged }) {
+  const { userId } = React.useContext(window.UserCtx);
+  const author = userById(post.authorId);
+  const mine = post.authorId === userId;
+  return (
+    <div style={{ background: TH.card, borderRadius: 14, padding: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Avatar name={author ? author.name : '?'} size={32} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: '#fff', fontWeight: 600, fontSize: 13 }}>{author ? author.name : 'Unknown'}</div>
+          <div style={{ color: TH.dim2, fontSize: 11 }}>{post.createdAt}</div>
+        </div>
+        {mine &&
+        <button onClick={() => Api.posts.remove(post.id).then(onChanged)} style={{
+          background: 'none', border: 'none', color: TH.dim, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit'
+        }}>Delete</button>
+        }
+      </div>
+      <div style={{ color: '#fff', fontSize: 13.5, marginTop: 8, lineHeight: 1.45 }}>{post.content}</div>
+      <div style={{ color: TH.dim, fontSize: 11.5, marginTop: 8 }}>♥ {post.likes} · {post.comments} comments</div>
+    </div>);
+
+}
+
+// ─── Group chat pane (session members, spec 9.13 / 17) ─────────────
+function GroupChatPane({ session }) {
+  const { userId } = React.useContext(window.UserCtx);
   const [draft, setDraft] = React.useState('');
+  const [tick, setTick] = React.useState(0);
+  const { data: msgs } = useApi(() => Api.chat.listForSession(session.id), [session.id, tick]);
   const scrollRef = React.useRef(null);
 
   const send = () => {
     const v = draft.trim();
     if (!v) return;
-    const now = new Date();
-    const time = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
-    setMsgs((m) => [...m, { from: 'me', text: v, t: time }]);
-    setDraft('');
-    setTimeout(() => {
-      const replies = ['Sounds good!', "Let's queue.", "I'm down.", 'Send the invite.', 'On it.', 'lol fr'];
-      const r = replies[Math.floor(Math.random() * replies.length)];
-      const t2 = new Date();
-      const time2 = t2.getHours().toString().padStart(2, '0') + ':' + t2.getMinutes().toString().padStart(2, '0');
-      setMsgs((m) => [...m, { from: 'them', text: r, t: time2 }]);
-    }, 900 + Math.random() * 600);
+    Api.chat.send({ sessionId: session.id, content: v }).then(() => { setDraft(''); setTick((t) => t + 1); });
   };
 
   React.useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [msgs.length]);
+  }, [msgs && msgs.length]);
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ padding: '8px 18px', display: 'flex', gap: -6 }}>
+        {session.members.slice(0, 5).map((mid) => {
+          const m = userById(mid);
+          return m ? <div key={mid} style={{ marginLeft: -8 }}><Avatar name={m.name} size={24} /></div> : null;
+        })}
+        <div style={{ marginLeft: 10, color: TH.dim, fontSize: 11, alignSelf: 'center' }}>{session.members.length} members in this chat</div>
+      </div>
       <div ref={scrollRef} style={{
-        flex: 1, overflowY: 'auto', padding: '16px 18px 8px',
+        flex: 1, overflowY: 'auto', padding: '8px 18px',
         display: 'flex', flexDirection: 'column', gap: 8
       }}>
-        {msgs.map((m, i) => {
-          const showAvatar = m.from === 'them' && (i === 0 || msgs[i - 1].from !== 'them');
+        {(msgs || []).map((m, i) => {
+          const sender = userById(m.senderId);
+          const mine = m.senderId === userId;
+          const prevSameSender = i > 0 && msgs[i - 1].senderId === m.senderId;
           return (
-            <div key={i} style={{
+            <div key={m.id} style={{
               display: 'flex', alignItems: 'flex-end', gap: 8,
-              justifyContent: m.from === 'me' ? 'flex-end' : 'flex-start',
+              justifyContent: mine ? 'flex-end' : 'flex-start',
               animation: 'msgIn .25s cubic-bezier(.2,.7,.2,1) both'
             }}>
-              {m.from === 'them' && (
-              showAvatar ?
-              <Avatar name={player.name} size={26} /> :
-              <div style={{ width: 26 }} />)
-              }
-              <div style={{
-                maxWidth: '72%',
-                background: m.from === 'me' ? TH.accent : 'rgba(255,255,255,0.08)',
-                color: '#fff', padding: '9px 13px',
-                borderRadius: m.from === 'me' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                fontSize: 14, lineHeight: 1.35,
-                boxShadow: m.from === 'me' ? '0 4px 14px rgba(91,92,255,0.25)' : 'none',
-                wordBreak: 'break-word'
-              }}>
-                {m.text}
+              {!mine && (!prevSameSender ? <Avatar name={sender ? sender.name : '?'} size={26} /> : <div style={{ width: 26 }} />)}
+              <div style={{ maxWidth: '72%' }}>
+                {!mine && !prevSameSender &&
+                <div style={{ color: TH.dim, fontSize: 10.5, marginBottom: 2, marginLeft: 4 }}>{sender ? sender.name : 'Unknown'}</div>
+                }
                 <div style={{
-                  fontSize: 10, opacity: 0.65, marginTop: 3,
-                  textAlign: m.from === 'me' ? 'right' : 'left'
-                }}>{m.t}</div>
+                  background: mine ? TH.accent : 'rgba(255,255,255,0.08)',
+                  color: '#fff', padding: '9px 13px',
+                  borderRadius: mine ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                  fontSize: 14, lineHeight: 1.35, wordBreak: 'break-word'
+                }}>{m.content}</div>
               </div>
             </div>);
 
         })}
       </div>
-      <form onSubmit={(e) => {e.preventDefault();send();}} style={{
-        padding: '10px 14px 12px',
-        borderTop: '1px solid rgba(255,255,255,0.06)',
+      <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{
+        padding: '10px 14px 12px', borderTop: '1px solid rgba(255,255,255,0.06)',
         display: 'flex', alignItems: 'center', gap: 8
       }}>
         <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={`Message ${player.name.split(' ')[0]}…`}
+          value={draft} onChange={(e) => setDraft(e.target.value)}
+          placeholder="Message the session…"
           style={{
-            flex: 1, background: 'rgba(255,255,255,0.06)',
-            border: '1px solid rgba(255,255,255,0.08)',
-            color: '#fff', padding: '12px 16px', borderRadius: 99,
-            fontSize: 14, fontFamily: 'inherit', outline: 'none'
+            flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)',
+            color: '#fff', padding: '12px 16px', borderRadius: 99, fontSize: 14, fontFamily: 'inherit', outline: 'none'
           }} />
-        
         <button type="submit" disabled={!draft.trim()} style={{
           background: draft.trim() ? TH.accent : 'rgba(255,255,255,0.08)',
           border: 'none', cursor: draft.trim() ? 'pointer' : 'default',
-          width: 42, height: 42, borderRadius: 99,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          transition: 'background .15s',
+          width: 42, height: 42, borderRadius: 99, display: 'flex', alignItems: 'center', justifyContent: 'center',
           boxShadow: draft.trim() ? '0 4px 14px rgba(91,92,255,0.4)' : 'none'
         }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path d="M3 11l18-8-8 18-2-7-8-3z" fill="#fff" />
-          </svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 11l18-8-8 18-2-7-8-3z" fill="#fff" /></svg>
         </button>
       </form>
     </div>);
 
 }
+window.GroupChatPane = GroupChatPane;
 
 // ════════════════════════════════════════════════════════════════════
 // JOINED CONFIRMATION
 // ════════════════════════════════════════════════════════════════════
 function JoinedScreen({ nav, state }) {
-  const p = PLAYERS_DUO.find((x) => x.id === state.playerId) || PLAYERS_DUO[0];
+  const { data: session } = useApi(() => Api.sessions.get(state.sessionId), [state.sessionId]);
+  if (!session) return <ScreenScroll><div style={{ padding: '70px 26px', color: TH.dim }}>Loading…</div></ScreenScroll>;
+  const host = userById(session.hostId);
   return (
     <ScreenScroll>
       <div style={{ padding: '40px 26px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
@@ -830,24 +924,28 @@ function JoinedScreen({ nav, state }) {
         </div>
         <div style={{ fontSize: 28, fontWeight: 700, color: '#fff', marginTop: 24 }}>You're in!</div>
         <div style={{ color: TH.dim, fontSize: 15, marginTop: 8, lineHeight: 1.45 }}>
-          Joined <b style={{ color: '#fff' }}>{p.name}</b>'s lobby.<br />Voice channel ready — say hi.
+          Joined <b style={{ color: '#fff' }}>{session.title}</b>.<br />Group chat is open — say hi.
         </div>
         <div style={{
           marginTop: 30, background: TH.card, borderRadius: 16, padding: 16,
           display: 'flex', alignItems: 'center', gap: 12, width: '100%'
         }}>
-          <Avatar name={p.name} size={48} />
+          <Avatar name={host ? host.name : '?'} size={48} />
           <div style={{ flex: 1, textAlign: 'left' }}>
-            <div style={{ color: '#fff', fontWeight: 600 }}>{p.name}</div>
-            <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>Host · Duo · Ranked</div>
+            <div style={{ color: '#fff', fontWeight: 600 }}>{host ? host.name : '—'}</div>
+            <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>Host · {session.mode} · {session.skillLevel}</div>
           </div>
           <div style={{ width: 10, height: 10, borderRadius: '50%', background: TH.green, boxShadow: '0 0 12px ' + TH.green }} />
         </div>
-        <button onClick={() => nav.reset('search')} style={{
+        <button onClick={() => nav.push('sessiondetail', { sessionId: session.id })} style={{
           marginTop: 24, background: TH.accent, color: '#fff', border: 'none',
           padding: '14px 40px', borderRadius: 99, fontSize: 15, fontWeight: 600,
           cursor: 'pointer', fontFamily: 'inherit'
-        }}>Back to lobby browser</button>
+        }}>Open session</button>
+        <button onClick={() => nav.reset('search')} style={{
+          marginTop: 10, background: 'transparent', color: TH.dim, border: 'none',
+          padding: '10px 40px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
+        }}>Back to search</button>
       </div>
     </ScreenScroll>);
 
@@ -860,12 +958,27 @@ window.JoinedScreen = JoinedScreen;
 function CreateScreen({ nav, state }) {
   const [name, setName] = React.useState('');
   const [mode, setMode] = React.useState('duo');
-  const [rank, setRank] = React.useState('amateur');
+  const [rank, setRank] = React.useState('Intermediate');
+  const [platform, setPlatform] = React.useState('PC');
+  const [region, setRegion] = React.useState('Israel');
+  const [privacy, setPrivacy] = React.useState('public');
+  const [maxPlayers, setMaxPlayers] = React.useState(mode === 'squad' ? 4 : 2);
   const [note, setNote] = React.useState('Looking for chill teammates.');
   const game = gameById(state.gameId);
   const defaultName = `${ME.name.split(' ')[0]}'s ${game.title} lobby`;
   const lobbyName = name.trim() || defaultName;
   const tooLong = name.length > 32;
+  const tooLongDesc = note.length > 200;
+  const validPlayers = maxPlayers >= 2 && maxPlayers <= 10;
+  const canSubmit = !tooLong && !tooLongDesc && validPlayers;
+
+  const submit = () => {
+    if (!canSubmit) return;
+    Api.sessions.create({
+      title: lobbyName, gameId: game.id, platform, region, mode,
+      skillLevel: rank, description: note, maxPlayers, privacy,
+    }).then((session) => nav.push('hostlive', { sessionId: session.id }));
+  };
 
   return (
     <ScreenScroll style={{ paddingTop: 50 }}>
@@ -901,15 +1014,27 @@ function CreateScreen({ nav, state }) {
           </div>
         </Section>
         <Section label="Mode">
-          <Segmented value={mode} onChange={setMode} options={[['duo', 'Duo'], ['squad', 'Squad']]} />
+          <Segmented value={mode} onChange={(v) => { setMode(v); setMaxPlayers(v === 'squad' ? 4 : 2); }} options={[['duo', 'Duo'], ['squad', 'Squad']]} />
         </Section>
-        <Section label="Looking for">
-          <Segmented value={rank} onChange={setRank} options={[['casual', 'Casual'], ['amateur', 'Amateur'], ['pro', 'Pro']]} />
+        <Section label="Platform">
+          <Segmented value={platform} onChange={setPlatform} options={[['PC', 'PC'], ['PlayStation', 'PS'], ['Xbox', 'Xbox'], ['Switch', 'Switch'], ['Mobile', 'Mobile']]} />
+        </Section>
+        <Section label="Region">
+          <Segmented value={region} onChange={setRegion} options={[['Israel', 'Israel'], ['Europe', 'Europe'], ['NA', 'NA'], ['Asia', 'Asia']]} />
+        </Section>
+        <Section label="Skill level">
+          <Segmented value={rank} onChange={setRank} options={[['Beginner', 'Beginner'], ['Intermediate', 'Intermediate'], ['Advanced', 'Advanced']]} />
+        </Section>
+        <Section label="Privacy">
+          <Segmented value={privacy} onChange={setPrivacy} options={[['public', 'Public'], ['private', 'Private']]} />
+        </Section>
+        <Section label={`Max players (${maxPlayers})`}>
+          <input type="range" min="2" max="10" value={maxPlayers} onChange={(e) => setMaxPlayers(Number(e.target.value))}
+            style={{ width: '100%' }} />
         </Section>
         <Section label="Note for teammates">
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} style={{
-            width: '100%', background: TH.card, border: '1px solid rgba(255,255,255,0.08)',
-            color: '#fff', padding: 14, borderRadius: 12, fontSize: 15, resize: 'none',
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={220} style={{
+            width: '100%', background: TH.card, border: '1px solid ' + (tooLongDesc ? '#FF5C5C' : 'rgba(255,255,255,0.08)'), color: '#fff', padding: 14, borderRadius: 12, fontSize: 15, resize: 'none',
             fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box'
           }} />
         </Section>
@@ -923,25 +1048,25 @@ function CreateScreen({ nav, state }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ color: '#fff', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lobbyName}</div>
             <div style={{ color: TH.dim, fontSize: 12, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {ME.name} · {note || '—'}
+              {ME.name} · {platform} · {region} · {note || '—'}
             </div>
           </div>
           <div style={{ color: TH.dim, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em' }}>preview</div>
         </div>
 
         <button
-          disabled={tooLong}
-          onClick={() => nav.push('hostlive', { gameId: game.id, mode, rank, note, lobbyName })}
+          disabled={!canSubmit}
+          onClick={submit}
           style={{
             marginTop: 22, width: '100%',
-            background: tooLong ? 'rgba(255,255,255,0.1)' : TH.accent,
+            background: canSubmit ? TH.accent : 'rgba(255,255,255,0.1)',
             color: '#fff', border: 'none',
             padding: '16px', borderRadius: 14, fontSize: 16, fontWeight: 600,
-            cursor: tooLong ? 'not-allowed' : 'pointer',
-            boxShadow: tooLong ? 'none' : '0 10px 28px rgba(91,92,255,0.35)',
+            cursor: canSubmit ? 'pointer' : 'not-allowed',
+            boxShadow: canSubmit ? '0 10px 28px rgba(91,92,255,0.35)' : 'none',
             fontFamily: 'inherit',
-            opacity: tooLong ? 0.6 : 1
-          }}>Open lobby & show QR</button>
+            opacity: canSubmit ? 1 : 0.6
+          }}>Create session</button>
       </div>
     </ScreenScroll>);
 
@@ -992,38 +1117,109 @@ function Segmented({ value, onChange, options }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// HOST LIVE (after Create) — my QR + waiting state
+// HOST LIVE / MANAGE SESSION — host-only management actions (spec 9.10)
 // ════════════════════════════════════════════════════════════════════
 function HostLiveScreen({ nav, state }) {
-  const game = gameById(state.gameId);
+  const { userId } = React.useContext(window.UserCtx);
+  const [refreshKey, setRefreshKey] = React.useState(0);
+  const refresh = () => setRefreshKey((k) => k + 1);
+
+  const { data: session, loading } = useApi(() => Api.sessions.get(state.sessionId), [state.sessionId, refreshKey]);
+  const { data: requests } = useApi(() => session ? Api.requests.listForSession(session.id) : Promise.resolve([]), [session && session.id, refreshKey]);
+
+  if (loading || !session) {
+    return <ScreenScroll><div style={{ padding: '70px 26px', color: TH.dim }}>Loading…</div></ScreenScroll>;
+  }
+
+  const isHost = session.hostId === userId;
+  if (!isHost) {
+    return <ScreenScroll><div style={{ padding: '70px 26px', color: TH.dim }}>Only the host can manage this session.</div></ScreenScroll>;
+  }
+
+  const game = gameById(session.gameId);
+  const pending = (requests || []).filter((r) => r.status === 'pending');
+
+  const approve = (id) => Api.requests.approve(id).then(refresh);
+  const reject = (id) => Api.requests.reject(id).then(refresh);
+  const removeMember = (uid) => Api.sessions.removeMember(session.id, uid).then(refresh);
+  const deleteSession = () => Api.sessions.remove(session.id).then(() => nav.reset('search'));
+
   return (
     <ScreenScroll style={{ paddingTop: 50 }}>
-      <div style={{ padding: '4px 18px 0' }}>
+      <div style={{ padding: '4px 18px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <BackBtn onClick={() => nav.pop()} style={{ marginLeft: -8 }} />
+        <button onClick={deleteSession} style={{
+          background: 'rgba(255,107,107,0.12)', color: '#FF8080', border: '1px solid rgba(255,107,107,0.35)',
+          borderRadius: 99, padding: '7px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
+        }}>Delete session</button>
       </div>
-      <div style={{ padding: '8px 26px 0', textAlign: 'center' }}>
+      <div style={{ padding: '8px 26px 0' }}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 99, background: 'rgba(63,209,106,0.15)', color: TH.green, fontSize: 12, fontWeight: 600, letterSpacing: '0.04em' }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: TH.green, boxShadow: '0 0 8px ' + TH.green }} />
-          LOBBY OPEN
+          HOSTING
         </div>
-        {state.lobbyName &&
-        <div style={{ fontSize: 13, color: '#fff', marginTop: 14, fontWeight: 600, letterSpacing: '0.02em' }}>
-            {state.lobbyName}
-          </div>
-        }
-        <h1 style={{ fontSize: 24, fontWeight: 600, color: '#fff', marginTop: state.lobbyName ? 6 : 14, letterSpacing: '-0.01em' }}>
-          Share to invite{state.mode === 'squad' ? ' your squad' : ' a partner'}
-        </h1>
+        <h1 style={{ fontSize: 24, fontWeight: 600, color: '#fff', marginTop: 14, letterSpacing: '-0.01em' }}>{session.title}</h1>
         <div style={{ color: TH.dim, fontSize: 13, marginTop: 4 }}>
-          {game.sub ? game.sub + ' ' : ''}{game.title} · {state.mode === 'squad' ? 'Squad' : 'Duo'} · {state.rank}
+          {game.sub ? game.sub + ' ' : ''}{game.title} · {session.mode} · {session.skillLevel} · {session.privacy}
         </div>
+
         <div style={{ marginTop: 22 }}>
-          <QRCode size={240} payload={`partyup://lobby/${ME.name.replace(/\s+/g, '-')}/${game.id}`} />
+          <QRCode size={180} payload={`partyup://session/${session.id}`} />
         </div>
-        <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, color: TH.dim, fontSize: 13 }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: TH.dim, animation: 'pulse 1.4s infinite' }} />
-          Waiting for players to join…
+
+        {/* Pending join requests — only the host sees these */}
+        <div style={{ marginTop: 26, fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>
+          Pending requests ({pending.length})
         </div>
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {pending.length === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>No pending requests.</div>}
+          {pending.map((r) => {
+            const u = userById(r.userId);
+            return (
+              <div key={r.id} style={{ background: TH.card, borderRadius: 14, padding: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Avatar name={u ? u.name : '?'} size={38} />
+                <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                  <div style={{ color: '#fff', fontWeight: 600, fontSize: 13.5 }}>{u ? u.name : 'Unknown'}</div>
+                  {r.message && <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{r.message}</div>}
+                </div>
+                <button onClick={() => approve(r.id)} style={{ background: TH.green, border: 'none', color: '#06210f', borderRadius: 99, width: 32, height: 32, cursor: 'pointer', fontWeight: 700 }}>✓</button>
+                <button onClick={() => reject(r.id)} style={{ background: 'rgba(255,107,107,0.18)', border: 'none', color: '#FF8080', borderRadius: 99, width: 32, height: 32, cursor: 'pointer', fontWeight: 700 }}>✕</button>
+              </div>);
+
+          })}
+        </div>
+
+        {/* Members */}
+        <div style={{ marginTop: 26, fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>
+          Members ({session.members.length}/{session.maxPlayers})
+        </div>
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10, paddingBottom: 20 }}>
+          {session.members.map((mid) => {
+            const m = userById(mid);
+            if (!m) return null;
+            return (
+              <div key={mid} style={{ background: TH.card, borderRadius: 14, padding: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Avatar name={m.name} size={38} />
+                <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                  <div style={{ color: '#fff', fontWeight: 600, fontSize: 13.5 }}>
+                    {m.name} {mid === session.hostId && <span style={{ color: TH.dim, fontWeight: 500 }}>· Host</span>}
+                  </div>
+                </div>
+                {mid !== session.hostId &&
+                <button onClick={() => removeMember(mid)} style={{
+                  background: 'none', border: 'none', color: TH.dim, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit'
+                }}>Remove</button>
+                }
+              </div>);
+
+          })}
+        </div>
+
+        <button onClick={() => nav.push('sessiondetail', { sessionId: session.id })} style={{
+          width: '100%', background: TH.accent, color: '#fff', border: 'none',
+          padding: '14px', borderRadius: 14, fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+          boxShadow: '0 10px 26px rgba(91,92,255,0.35)', marginBottom: 30
+        }}>Open group chat & posts</button>
       </div>
     </ScreenScroll>);
 
@@ -1146,7 +1342,10 @@ function MyProfileScreen({ nav }) {
         </div>
       </div>
 
-      {sheet === 'menu' && <ProfileMenuSheet onPick={(id) => setSheet(id)} onClose={() => setSheet(null)} />}
+      {sheet === 'menu' && <ProfileMenuSheet onPick={(id) => {
+        if (id === 'mysessions' || id === 'stats') { setSheet(null); nav.reset(id); }
+        else setSheet(id);
+      }} onClose={() => setSheet(null)} />}
       {sheet === 'see' && <SeePictureOverlay me={me} onClose={() => setSheet(null)} />}
       {sheet === 'select' && <SelectPictureSheet me={me} onSave={(palette) => { saveMe({ palette }); setSheet(null); }} onClose={() => setSheet(null)} />}
       {sheet === 'edit' && <EditProfileSheet me={me} onSave={(patch) => { saveMe(patch); setSheet(null); }} onClose={() => setSheet(null)} />}
@@ -1159,6 +1358,23 @@ window.MyProfileScreen = MyProfileScreen;
 // ─── Profile action menu ───────────────────────────────────────────
 function ProfileMenuSheet({ onPick, onClose }) {
   const items = [
+    {
+      id: 'mysessions', label: 'My sessions',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <circle cx="9" cy="9" r="3.5" stroke="#fff" strokeWidth="1.8"/><circle cx="17" cy="10" r="2.5" stroke="#fff" strokeWidth="1.8"/>
+          <path d="M3 19c1-3 3.3-4.5 6-4.5s5 1.5 6 4.5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round"/>
+        </svg>
+      ),
+    },
+    {
+      id: 'stats', label: 'Statistics dashboard',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path d="M4 20V10M11 20V4M18 20v-7" stroke="#fff" strokeWidth="1.8" strokeLinecap="round"/>
+        </svg>
+      ),
+    },
     {
       id: 'see', label: 'See profile picture',
       icon: (
@@ -1471,10 +1687,9 @@ function FavoritesScreen({ nav }) {
         <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Players</div>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {favPlayers.map((p) =>
-          <button key={p.id} onClick={() => nav.push('player', { playerId: p.id, mode: 'duo' })} style={{
-            background: 'transparent', border: 'none', cursor: 'pointer',
+          <div key={p.id} style={{
             padding: '12px 4px', display: 'flex', alignItems: 'center', gap: 14,
-            borderBottom: '1px solid rgba(255,255,255,0.05)', textAlign: 'left'
+            borderBottom: '1px solid rgba(255,255,255,0.05)'
           }}>
               <Avatar name={p.name} size={42} />
               <div style={{ flex: 1 }}>
@@ -1482,7 +1697,7 @@ function FavoritesScreen({ nav }) {
                 <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{p.about}</div>
               </div>
               {Ico.starFill(18)}
-            </button>
+            </div>
           )}
         </div>
         <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', margin: '22px 0 10px' }}>Games</div>
@@ -1505,44 +1720,220 @@ function FavoritesScreen({ nav }) {
 window.FavoritesScreen = FavoritesScreen;
 
 // ════════════════════════════════════════════════════════════════════
-// RECENT
+// RECENT ACTIVITY — recently joined sessions, posts, and join requests (spec 9.16)
 // ════════════════════════════════════════════════════════════════════
 function RecentScreen({ nav }) {
+  const { userId } = React.useContext(window.UserCtx);
+  const { data: mySessions } = useApi(() => Api.sessions.list({}).then((all) => all.filter((s) => s.members.includes(userId))), [userId]);
+  const { data: myRequests } = useApi(() => Api.requests.listForUser(userId), [userId]);
+  const { data: myPosts } = useApi(() => Api.posts.listFeedForUser(userId).then((all) => all.filter((p) => p.authorId === userId)), [userId]);
+
+  const statusColor = { pending: '#FFD43A', approved: TH.green, rejected: '#FF7B7B' };
+
   return (
     <ScreenScroll>
-      <div style={{ padding: '20px 26px 8px' }}>
-        <h1 style={{ fontSize: 32, fontWeight: 600, color: '#fff', margin: '8px 0 18px', letterSpacing: '-0.02em' }}>Recent</h1>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {[
-          { p: 'bruce', game: 'valorant', when: '2h ago', result: 'Duo · won' },
-          { p: 'carmen', game: 'cs', when: 'Yesterday', result: 'Duo · lost' },
-          { p: 'kyle', game: 'apex', when: '2d ago', result: 'Squad · top 3' },
-          { p: 'harry', game: 'amongus', when: '4d ago', result: 'Squad · crew win' },
-          { p: 'patrick', game: 'minecraft', when: 'Last week', result: 'Casual' }].
-          map((r, i) => {
-            const player = PLAYERS_DUO.find((x) => x.id === r.p);
-            const g = gameById(r.game);
+      <div style={{ padding: '20px 26px 40px' }}>
+        <h1 style={{ fontSize: 32, fontWeight: 600, color: '#fff', margin: '8px 0 18px', letterSpacing: '-0.02em' }}>Recent activity</h1>
+
+        <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Recently joined sessions</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22 }}>
+          {(mySessions || []).length === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>No sessions joined yet.</div>}
+          {(mySessions || []).slice(0, 5).map((s) => {
+            const g = gameById(s.gameId);
             return (
-              <button key={i} onClick={() => nav.push('player', { playerId: r.p, mode: 'duo' })} style={{
+              <button key={s.id} onClick={() => nav.push('sessiondetail', { sessionId: s.id })} style={{
                 background: TH.card, border: 'none', borderRadius: 14, padding: 12,
                 display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', textAlign: 'left'
               }}>
-                <div style={{ width: 72, aspectRatio: '16/10', borderRadius: 10, overflow: 'hidden', flexShrink: 0 }}>
-                  <GameCover game={g} />
+                <div style={{ width: 56, aspectRatio: '1', borderRadius: 10, overflow: 'hidden', flexShrink: 0 }}>
+                  <GameCover game={g} aspect="1" />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#fff', fontWeight: 600 }}>
-                    {player.name}
-                  </div>
-                  <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{g.sub ? g.sub + ' ' : ''}{g.title} · {r.result}</div>
+                  <div style={{ color: '#fff', fontWeight: 600 }}>{s.title}</div>
+                  <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{g.sub ? g.sub + ' ' : ''}{g.title} · {s.mode}</div>
                 </div>
-                <div style={{ color: TH.dim, fontSize: 12 }}>{r.when}</div>
+                {Ico.chevron(16, '#fff')}
               </button>);
 
           })}
+        </div>
+
+        <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Recent join requests</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22 }}>
+          {(myRequests || []).length === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>No join requests yet.</div>}
+          {(myRequests || []).map((r) => {
+            const s = SESSIONS.find((x) => x.id === r.sessionId);
+            if (!s) return null;
+            return (
+              <button key={r.id} onClick={() => nav.push('sessiondetail', { sessionId: r.sessionId })} style={{
+                background: TH.card, border: 'none', borderRadius: 14, padding: 12,
+                display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', textAlign: 'left'
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: '#fff', fontWeight: 600 }}>{s.title}</div>
+                  <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{r.createdAt}</div>
+                </div>
+                <span style={{ color: statusColor[r.status], fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{r.status}</span>
+              </button>);
+
+          })}
+        </div>
+
+        <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Your recent posts</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {(myPosts || []).length === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>No posts yet.</div>}
+          {(myPosts || []).slice(0, 5).map((p) => (
+            <div key={p.id} style={{ background: TH.card, borderRadius: 14, padding: 12 }}>
+              <div style={{ color: '#fff', fontSize: 13.5 }}>{p.content}</div>
+              <div style={{ color: TH.dim2, fontSize: 11, marginTop: 6 }}>{p.createdAt}</div>
+            </div>
+          ))}
         </div>
       </div>
     </ScreenScroll>);
 
 }
 window.RecentScreen = RecentScreen;
+
+// ════════════════════════════════════════════════════════════════════
+// MY SESSIONS — joined / created / pending / approved / rejected (spec 9.17)
+// ════════════════════════════════════════════════════════════════════
+function MySessionsScreen({ nav }) {
+  const { userId } = React.useContext(window.UserCtx);
+  const { data: allSessions } = useApi(() => Api.sessions.list({}), [userId]);
+  const { data: myRequests } = useApi(() => Api.requests.listForUser(userId), [userId]);
+
+  const created = (allSessions || []).filter((s) => s.hostId === userId);
+  const joined = (allSessions || []).filter((s) => s.hostId !== userId && s.members.includes(userId));
+  const pending = (myRequests || []).filter((r) => r.status === 'pending');
+  const approved = (myRequests || []).filter((r) => r.status === 'approved');
+  const rejected = (myRequests || []).filter((r) => r.status === 'rejected');
+
+  const SessionRow = ({ s }) => {
+    const g = gameById(s.gameId);
+    return (
+      <button onClick={() => nav.push('sessiondetail', { sessionId: s.id })} style={{
+        background: TH.card, border: 'none', borderRadius: 14, padding: 12,
+        display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', textAlign: 'left', width: '100%'
+      }}>
+        <div style={{ width: 48, aspectRatio: '1', borderRadius: 10, overflow: 'hidden', flexShrink: 0 }}>
+          <GameCover game={g} aspect="1" />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: '#fff', fontWeight: 600, fontSize: 14 }}>{s.title}</div>
+          <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{s.members.length}/{s.maxPlayers} · {s.privacy}</div>
+        </div>
+        {Ico.chevron(16, '#fff')}
+      </button>);
+
+  };
+
+  const RequestRow = ({ r, color }) => {
+    const s = SESSIONS.find((x) => x.id === r.sessionId);
+    if (!s) return null;
+    return (
+      <button onClick={() => nav.push('sessiondetail', { sessionId: r.sessionId })} style={{
+        background: TH.card, border: 'none', borderRadius: 14, padding: 12,
+        display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', textAlign: 'left', width: '100%'
+      }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: '#fff', fontWeight: 600, fontSize: 14 }}>{s.title}</div>
+          <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{r.createdAt}</div>
+        </div>
+        <span style={{ color, fontSize: 11, fontWeight: 700, textTransform: 'uppercase' }}>{r.status}</span>
+      </button>);
+
+  };
+
+  const Group = ({ title, children, empty }) => (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>{title}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {React.Children.count(children) === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>{empty}</div>}
+        {children}
+      </div>
+    </div>
+  );
+
+  return (
+    <ScreenScroll>
+      <div style={{ padding: '20px 26px 40px' }}>
+        <h1 style={{ fontSize: 32, fontWeight: 600, color: '#fff', margin: '8px 0 18px', letterSpacing: '-0.02em' }}>My sessions</h1>
+
+        <Group title="Sessions I created" empty="You haven't hosted a session yet.">
+          {created.map((s) => <SessionRow key={s.id} s={s} />)}
+        </Group>
+        <Group title="Sessions I joined" empty="You haven't joined a session yet.">
+          {joined.map((s) => <SessionRow key={s.id} s={s} />)}
+        </Group>
+        <Group title="Pending requests" empty="No pending requests.">
+          {pending.map((r) => <RequestRow key={r.id} r={r} color="#FFD43A" />)}
+        </Group>
+        <Group title="Approved requests" empty="No approved requests.">
+          {approved.map((r) => <RequestRow key={r.id} r={r} color={TH.green} />)}
+        </Group>
+        <Group title="Rejected requests" empty="No rejected requests.">
+          {rejected.map((r) => <RequestRow key={r.id} r={r} color="#FF7B7B" />)}
+        </Group>
+      </div>
+    </ScreenScroll>);
+
+}
+window.MySessionsScreen = MySessionsScreen;
+
+// ════════════════════════════════════════════════════════════════════
+// STATISTICS DASHBOARD — dynamic charts from mock "DB" data (spec 9.18 / 18)
+// ════════════════════════════════════════════════════════════════════
+function StatsDashboardScreen({ nav }) {
+  const { data: postsPerMonth } = useApi(() => Api.stats.postsPerMonth(), []);
+  const { data: sessionsPerGame } = useApi(() => Api.stats.sessionsPerGame(), []);
+  const { data: usersByPlatform } = useApi(() => Api.stats.usersByPlatform(), []);
+  const { data: requestsByStatus } = useApi(() => Api.stats.requestsByStatus(), []);
+
+  return (
+    <ScreenScroll>
+      <div style={{ padding: '20px 26px 40px' }}>
+        <BackBtn onClick={() => nav.pop()} style={{ marginLeft: -8, marginBottom: 4 }} />
+        <h1 style={{ fontSize: 32, fontWeight: 600, color: '#fff', margin: '8px 0 18px', letterSpacing: '-0.02em' }}>Statistics</h1>
+
+        <BarChart title="Posts per month" data={(postsPerMonth || []).map((d) => ({ label: d.month.slice(5), value: d.count }))} color={TH.accent} />
+        <BarChart title="Sessions per game" data={(sessionsPerGame || []).map((d) => ({ label: d.game ? d.game.title : d.gameId, value: d.count }))} color={TH.green} />
+        <BarChart title="Users by platform" data={(usersByPlatform || []).map((d) => ({ label: d.platform, value: d.count }))} color="#FFD43A" />
+        <BarChart title="Join requests by status" data={(requestsByStatus || []).map((d) => ({ label: d.status, value: d.count }))} color="#FF7B7B" />
+
+        <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10, fontWeight: 600 }}>About these numbers</div>
+        <div style={{ columnCount: 2, columnGap: 16, color: TH.dim, fontSize: 11.5, lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 8px' }}>Posts per month reflects every post created across all sessions.</p>
+          <p style={{ margin: '0 0 8px' }}>Sessions per game shows where the community is currently most active.</p>
+          <p style={{ margin: '0 0 8px' }}>Platform and request charts update live as users register and hosts respond.</p>
+        </div>
+      </div>
+    </ScreenScroll>);
+
+}
+window.StatsDashboardScreen = StatsDashboardScreen;
+
+// Simple horizontal bar chart — no chart library needed, driven by live Api.stats data
+function BarChart({ title, data, color }) {
+  const max = Math.max(1, ...data.map((d) => d.value));
+  return (
+    <div style={{ marginBottom: 26 }}>
+      <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12, fontWeight: 600 }}>{title}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {data.length === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>No data yet.</div>}
+        {data.map((d, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 78, color: TH.dim, fontSize: 11.5, flexShrink: 0, textAlign: 'right', textTransform: 'capitalize' }}>{d.label}</div>
+            <div style={{ flex: 1, background: 'rgba(255,255,255,0.06)', borderRadius: 6, overflow: 'hidden', height: 16 }}>
+              <div style={{
+                width: `${(d.value / max) * 100}%`, height: '100%', background: color,
+                borderRadius: 6, transition: 'width .4s cubic-bezier(.2,.7,.2,1)'
+              }} />
+            </div>
+            <div style={{ width: 22, color: '#fff', fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{d.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>);
+
+}

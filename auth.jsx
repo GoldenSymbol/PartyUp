@@ -61,7 +61,7 @@ function AuthHero({ subtitle }) {
       </div>
       <div style={{
         fontSize:30, fontWeight:700, color:'#fff', letterSpacing:'-0.02em',
-        fontFamily:'inherit',
+        fontFamily:'inherit', textShadow:'0 2px 18px rgba(91,92,255,0.65)',
       }}>
         Party<span style={{color:TH.accent}}>Up</span>
       </div>
@@ -163,10 +163,18 @@ function AuthBg() {
 // LOGIN
 // ════════════════════════════════════════════════════════════════════
 function LoginScreen({ nav }) {
+  const { setUserId } = React.useContext(window.UserCtx);
   const [email, setEmail] = React.useState('');
   const [pwd, setPwd]     = React.useState('');
   const [remember, setRemember] = React.useState(true);
   const valid = email.includes('@') && pwd.length >= 4;
+
+  const submit = () => {
+    Api.auth.login(email).then((user) => {
+      setUserId(user.id);
+      nav.reset('search');
+    });
+  };
 
   return (
     <div style={{position:'absolute', inset:0, overflow:'auto'}}>
@@ -221,7 +229,7 @@ function LoginScreen({ nav }) {
 
         <button
           disabled={!valid}
-          onClick={()=>nav.reset('search')}
+          onClick={submit}
           style={{
             marginTop:22, background: valid ? TH.accent : 'rgba(255,255,255,0.1)',
             color:'#fff', border:'none', padding:'16px', borderRadius:14,
@@ -231,6 +239,9 @@ function LoginScreen({ nav }) {
             fontFamily:'inherit',
             transition:'all .18s',
           }}>Sign in</button>
+        <div style={{ textAlign: 'center', marginTop: 10, color: TH.dim2, fontSize: 11 }}>
+          Demo: menalu@partyup.com or noa@partyup.com · any password
+        </div>
 
         <div style={{
           textAlign:'center', marginTop:'auto', paddingTop:22,
@@ -251,11 +262,19 @@ window.LoginScreen = LoginScreen;
 // REGISTER
 // ════════════════════════════════════════════════════════════════════
 function RegisterScreen({ nav }) {
+  const { setUserId } = React.useContext(window.UserCtx);
   const [name, setName]   = React.useState('');
   const [email, setEmail] = React.useState('');
   const [pwd, setPwd]     = React.useState('');
-  const [country, setCountry] = React.useState({ name:'United States' });
+  const [pwd2, setPwd2]   = React.useState('');
+  const [country, setCountry] = React.useState({ name:'United States' }); // doubles as Region
   const [countryOpen, setCountryOpen] = React.useState(false);
+  const PLATFORMS = ['PC', 'PlayStation', 'Xbox', 'Switch', 'Mobile'];
+  const SKILL_LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
+  const [platform, setPlatform] = React.useState('PC');
+  const [skillLevel, setSkillLevel] = React.useState('Beginner');
+  const [favGameIds, setFavGameIds] = React.useState([]);
+  const toggleFavGameId = (id) => setFavGameIds(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   const COUNTRIES = [
     { name:'United States' }, { name:'United Kingdom' }, { name:'Canada' },
     { name:'Mexico' }, { name:'Brazil' }, { name:'Argentina' },
@@ -267,7 +286,16 @@ function RegisterScreen({ nav }) {
     { name:'India' }, { name:'Singapore' }, { name:'Philippines' },
     { name:'Australia' }, { name:'New Zealand' }, { name:'South Africa' },
   ];
-  const valid = name.length >= 2 && email.includes('@') && pwd.length >= 6;
+  const valid = name.length >= 2 && email.includes('@') && pwd.length >= 6 && pwd === pwd2;
+
+  const submit = () => {
+    Api.users.create({
+      name, region: country.name, platform, skillLevel, favoriteGames: favGameIds,
+    }).then((user) => {
+      setUserId(user.id);
+      nav.reset('search');
+    });
+  };
   // password strength
   const strength = Math.min(4, [
     pwd.length >= 6,
@@ -299,12 +327,12 @@ function RegisterScreen({ nav }) {
             icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2" stroke="#fff" strokeWidth="1.8"/><path d="M3 7l9 6 9-6" stroke="#fff" strokeWidth="1.8"/></svg>}
           />
 
-          {/* Country */}
+          {/* Region */}
           <div>
             <div style={{
               fontSize:11, color:TH.dim, textTransform:'uppercase',
               letterSpacing:'0.08em', marginBottom:8, fontWeight:600,
-            }}>Country</div>
+            }}>Region</div>
             <button onClick={()=>setCountryOpen(true)} style={{
               width:'100%', display:'flex', alignItems:'center', gap:12,
               background:'rgba(255,255,255,0.04)',
@@ -348,6 +376,41 @@ function RegisterScreen({ nav }) {
               </div>
             )}
           </div>
+
+          <AuthInput label="Confirm password" type="password" value={pwd2} onChange={setPwd2}
+            placeholder="Re-enter password"
+            icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7.5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+          />
+          {pwd2.length > 0 && pwd !== pwd2 && (
+            <div style={{ color: '#FF8080', fontSize: 12 }}>Passwords don't match.</div>
+          )}
+
+          <div>
+            <div style={{ fontSize: 11, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, fontWeight: 600 }}>Platform</div>
+            <Segmented value={platform} onChange={setPlatform} options={PLATFORMS.map(p => [p, p])} />
+          </div>
+
+          <div>
+            <div style={{ fontSize: 11, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, fontWeight: 600 }}>Skill level</div>
+            <Segmented value={skillLevel} onChange={setSkillLevel} options={SKILL_LEVELS.map(s => [s, s])} />
+          </div>
+
+          <div>
+            <div style={{ fontSize: 11, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, fontWeight: 600 }}>Favorite games</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {GAMES.map((g) => {
+                const on = favGameIds.includes(g.id);
+                return (
+                  <button key={g.id} onClick={() => toggleFavGameId(g.id)} style={{
+                    background: on ? 'rgba(91,92,255,0.22)' : 'rgba(255,255,255,0.04)',
+                    border: '1px solid ' + (on ? 'rgba(91,92,255,0.55)' : 'rgba(255,255,255,0.08)'),
+                    color: '#fff', borderRadius: 99, padding: '8px 14px', fontSize: 12.5, fontWeight: 600,
+                    cursor: 'pointer', fontFamily: 'inherit', transition: 'background .15s, border-color .15s',
+                  }}>{g.sub ? g.sub + ' ' : ''}{g.title}</button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         <div style={{marginTop:18, color:TH.dim2, fontSize:11, lineHeight:1.5}}>
@@ -359,7 +422,7 @@ function RegisterScreen({ nav }) {
 
         <button
           disabled={!valid}
-          onClick={()=>nav.reset('search')}
+          onClick={submit}
           style={{
             marginTop:14, background: valid ? TH.accent : 'rgba(255,255,255,0.1)',
             color:'#fff', border:'none', padding:'16px', borderRadius:14,

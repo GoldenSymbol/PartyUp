@@ -10,6 +10,10 @@ const DEFAULTS = /*EDITMODE-BEGIN*/{
 const FavCtx = React.createContext({ favGames: [], toggleFavGame: () => {} });
 window.FavCtx = FavCtx;
 
+// Logged-in demo user — switched by LoginScreen via Api.auth.login()
+const UserCtx = React.createContext({ userId: 'menalu', user: null, setUserId: () => {} });
+window.UserCtx = UserCtx;
+
 function App() {
   const [t, setTweak] = useTweaks(DEFAULTS);
   // Override theme tokens live
@@ -19,8 +23,13 @@ function App() {
     document.documentElement.style.setProperty('--accent', t.accent);
   }, [t.accent, t.bg]);
 
-  // Favorite games — global app state
-  const [favGames, setFavGames] = React.useState(['valorant','dbfz','overwatch']);
+  // Logged-in user — drives host/regular permissions across session screens
+  const [userId, setUserIdState] = React.useState(window.CURRENT_USER_ID || 'menalu');
+  const setUserId = React.useCallback((id) => { window.CURRENT_USER_ID = id; setUserIdState(id); }, []);
+  const userCtxValue = React.useMemo(() => ({ userId, user: userById(userId), setUserId }), [userId]);
+
+  // Favorite games — global app state, seeded from the logged-in user's profile
+  const [favGames, setFavGames] = React.useState(() => [...(userById(userId)?.favoriteGames || [])]);
   const toggleFavGame = React.useCallback((id) => {
     setFavGames(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   }, []);
@@ -47,29 +56,32 @@ function App() {
 
   // Map route → tab id (for highlighting)
   const tabFor = (r) => {
-    if (['search','console','hostjoin','player','joined','create','hostlive'].includes(r)) return 'search';
+    if (['search','console','sessions','sessiondetail','joined','create','hostlive','mysessions','stats'].includes(r)) return 'search';
     return r === 'fav' ? 'fav' : r;
   };
 
   const screen = (() => {
     switch (top.route) {
-      case 'login':    return <LoginScreen    nav={nav} />;
-      case 'register': return <RegisterScreen nav={nav} />;
-      case 'search':   return <SearchScreen   nav={nav} state={top.state} />;
-      case 'console':  return <ConsoleScreen  nav={nav} state={top.state} />;
-      case 'hostjoin': return <HostJoinScreen nav={nav} state={top.state} />;
-      case 'player':   return <PlayerScreen   nav={nav} state={top.state} />;
-      case 'joined':   return <JoinedScreen   nav={nav} state={top.state} />;
-      case 'create':   return <CreateScreen   nav={nav} state={top.state} />;
-      case 'hostlive': return <HostLiveScreen nav={nav} state={top.state} />;
-      case 'profile':  return <MyProfileScreen nav={nav} />;
-      case 'recent':   return <RecentScreen   nav={nav} />;
-      case 'fav':      return <FavoritesScreen nav={nav} />;
+      case 'login':         return <LoginScreen        nav={nav} />;
+      case 'register':      return <RegisterScreen     nav={nav} />;
+      case 'search':        return <SearchScreen       nav={nav} state={top.state} />;
+      case 'console':       return <ConsoleScreen      nav={nav} state={top.state} />;
+      case 'sessions':      return <SessionsListScreen nav={nav} state={top.state} />;
+      case 'sessiondetail': return <SessionDetailScreen nav={nav} state={top.state} />;
+      case 'joined':        return <JoinedScreen       nav={nav} state={top.state} />;
+      case 'create':        return <CreateScreen       nav={nav} state={top.state} />;
+      case 'hostlive':      return <HostLiveScreen     nav={nav} state={top.state} />;
+      case 'profile':       return <MyProfileScreen    nav={nav} />;
+      case 'recent':        return <RecentScreen       nav={nav} />;
+      case 'fav':           return <FavoritesScreen    nav={nav} />;
+      case 'mysessions':    return <MySessionsScreen   nav={nav} />;
+      case 'stats':         return <StatsDashboardScreen nav={nav} />;
       default: return null;
     }
   })();
 
   return (
+    <UserCtx.Provider value={userCtxValue}>
     <FavCtx.Provider value={favCtxValue}>
     <div style={{
       minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center',
@@ -107,17 +119,29 @@ function App() {
             <button onClick={()=>nav.reset('register')} style={tbtn}>Register</button>
             <button onClick={()=>nav.reset('search')} style={tbtn}>Search</button>
             <button onClick={()=>nav.push('console',{gameId:'valorant'})} style={tbtn}>Game · Valorant</button>
-            <button onClick={()=>nav.push('hostjoin',{gameId:'valorant'})} style={tbtn}>Find partner</button>
-            <button onClick={()=>nav.push('player',{playerId:'bruce', mode:'duo'})} style={tbtn}>Player · QR</button>
-            <button onClick={()=>nav.push('create',{gameId:'valorant'})} style={tbtn}>Host setup</button>
-            <button onClick={()=>nav.push('hostlive',{gameId:'valorant', mode:'duo', rank:'amateur'})} style={tbtn}>Hosting</button>
+            <button onClick={()=>nav.push('sessions',{gameId:'valorant'})} style={tbtn}>Sessions list</button>
+            <button onClick={()=>nav.push('sessiondetail',{sessionId:'s1'})} style={tbtn}>Session details</button>
+            <button onClick={()=>nav.push('create',{gameId:'valorant'})} style={tbtn}>Create session</button>
+            <button onClick={()=>nav.push('hostlive',{sessionId:'s1'})} style={tbtn}>Manage (host)</button>
+            <button onClick={()=>nav.reset('mysessions')} style={tbtn}>My sessions</button>
+            <button onClick={()=>nav.reset('stats')} style={tbtn}>Statistics</button>
             <button onClick={()=>nav.reset('profile')} style={tbtn}>My profile</button>
-            <button onClick={()=>nav.push('joined',{playerId:'bruce'})} style={tbtn}>Joined ✓</button>
+            <button onClick={()=>nav.push('joined',{sessionId:'s2'})} style={tbtn}>Joined ✓</button>
+          </div>
+        </TweakSection>
+        <TweakSection title="Demo login as">
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
+            {USERS.map(u => (
+              <button key={u.id} onClick={()=>{ setUserId(u.id); nav.reset('search'); }} style={tbtn}>
+                {u.name} {u.role === 'host' ? '(host)' : ''}
+              </button>
+            ))}
           </div>
         </TweakSection>
       </TweaksPanel>
     </div>
     </FavCtx.Provider>
+    </UserCtx.Provider>
   );
 }
 

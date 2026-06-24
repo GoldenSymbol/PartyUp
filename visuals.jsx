@@ -100,7 +100,7 @@ function GameCover({ game, size = 'sm', radius = 12, aspect }) {
       <div style={{
         position: 'absolute', left: 0, right: 0, bottom: big ? 12 : 6,
         display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center',
-        fontFamily: '"Bebas Neue", "Oswald", Impact, sans-serif',
+        fontFamily: '"PartyUpDisplay", "Bebas Neue", "Oswald", Impact, sans-serif',
         letterSpacing: '0.04em',
         color: '#fff',
         filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.55)) drop-shadow(0 1px 1px rgba(0,0,0,0.4))',
@@ -171,3 +171,45 @@ function QRCode({ size = 240, payload = 'partyup://' }) {
 
 }
 window.QRCode = QRCode;
+
+// ─── Skill badge (Canvas) — arc gauge drawn per member skill level ──
+function SkillBadgeCanvas({ skillLevel, size = 44, color }) {
+  const ref = React.useRef(null);
+  const pct = { Beginner: 0.33, Intermediate: 0.66, Advanced: 1 }[skillLevel] || 0.33;
+  const c = color || window.TH.accent;
+
+  React.useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, size, size);
+    const cx = size / 2, cy = size / 2, r = size / 2 - 4;
+    const start = -Math.PI / 2;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, start, start + pct * Math.PI * 2);
+    ctx.strokeStyle = c;
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = `700 ${size * 0.26}px -apple-system, system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.round(pct * 100) + '%', cx, cy + 1);
+  }, [skillLevel, size, c, pct]);
+
+  return <canvas ref={ref} style={{ width: size, height: size }} aria-label={`Skill level: ${skillLevel}`} />;
+}
+window.SkillBadgeCanvas = SkillBadgeCanvas;

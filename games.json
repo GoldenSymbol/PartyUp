@@ -1,0 +1,16 @@
+[
+  { "id": "warzone",  "title": "WARZONE",    "sub": "CALL OF DUTY", "bg": "linear-gradient(160deg,#3a4a3a 0%,#1a201a 60%,#0a0e0a 100%)", "accent": "#8FA37A", "vibe": "military" },
+  { "id": "rust",     "title": "RUST",       "sub": "",             "bg": "linear-gradient(180deg,#3d2918 0%,#1a0f08 100%)", "accent": "#D86A2C", "vibe": "silhouette" },
+  { "id": "persona",  "title": "P5",         "sub": "PERSONA",      "bg": "linear-gradient(135deg,#9B1414 0%,#3a0606 100%)", "accent": "#FFD700", "vibe": "mask" },
+  { "id": "lol",      "title": "LEAGUE OF",  "sub": "LEGENDS",      "bg": "linear-gradient(180deg,#0a3a6e 0%,#020c1f 100%)", "accent": "#C8A765", "vibe": "crest" },
+  { "id": "overwatch","title": "OVERWATCH",  "sub": "",             "bg": "linear-gradient(135deg,#F09030 0%,#a14e10 60%,#3a1d05 100%)", "accent": "#ffffff", "vibe": "hex" },
+  { "id": "amongus",  "title": "AMONG US",   "sub": "",             "bg": "linear-gradient(180deg,#7c2cc4 0%,#3a1062 100%)", "accent": "#ff4757", "vibe": "crewmate" },
+  { "id": "cs",       "title": "COUNTER",    "sub": "STRIKE",       "bg": "linear-gradient(180deg,#1a1a1a 0%,#000 100%)", "accent": "#F58220", "vibe": "crosshair" },
+  { "id": "minecraft","title": "MINECRAFT",  "sub": "",             "bg": "linear-gradient(180deg,#4a8a3a 0%,#1f4218 100%)", "accent": "#9BD66B", "vibe": "pixel" },
+  { "id": "apex",     "title": "APEX",       "sub": "LEGENDS",      "bg": "linear-gradient(180deg,#c4a014 0%,#1a1408 100%)", "accent": "#E8C547", "vibe": "apex" },
+  { "id": "valorant", "title": "VALORANT",   "sub": "",             "bg": "linear-gradient(135deg,#ff4655 0%,#7a1a22 100%)", "accent": "#0f1923", "vibe": "tactical" },
+  { "id": "dbfz",     "title": "DBFZ",       "sub": "DRAGON BALL",  "bg": "linear-gradient(135deg,#ffa820 0%,#c44a14 60%,#3a1a05 100%)", "accent": "#fff", "vibe": "aura" },
+  { "id": "fortnite", "title": "FORTNITE",   "sub": "",             "bg": "linear-gradient(180deg,#7e3ff2 0%,#1d0a52 100%)", "accent": "#00d4ff", "vibe": "storm" },
+  { "id": "fifa",     "title": "FIFA",       "sub": "",             "bg": "linear-gradient(160deg,#0a3a1a 0%,#021a0a 100%)", "accent": "#4ADE80", "vibe": "" },
+  { "id": "rocketleague", "title": "ROCKET", "sub": "LEAGUE",       "bg": "linear-gradient(135deg,#FF7A18 0%,#1a0a3a 70%,#05010a 100%)", "accent": "#3FA8FF", "vibe": "storm" }
+]
