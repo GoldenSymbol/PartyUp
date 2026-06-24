@@ -10,6 +10,22 @@ const DEFAULTS = /*EDITMODE-BEGIN*/{
 const FavCtx = React.createContext({ favGames: [], toggleFavGame: () => {} });
 window.FavCtx = FavCtx;
 
+// ─── Web layout shell ────────────────────────────────────────────────
+// Default render mode: a normal, responsive, centered web app container.
+// No iOS bezel / status bar / dynamic island / home indicator — same
+// screens, same nav, same data layer, just without the phone frame.
+function WebShell({ bg, children }) {
+  return (
+    <div style={{
+      position: 'relative', width: '100%', maxWidth: 1160, minHeight: '100vh',
+      overflow: 'hidden', background: bg,
+    }}>
+      {children}
+    </div>
+  );
+}
+window.WebShell = WebShell;
+
 // Logged-in demo user — switched by LoginScreen via Api.auth.login()
 const UserCtx = React.createContext({ userId: 'menalu', user: null, setUserId: () => {} });
 window.UserCtx = UserCtx;
@@ -84,11 +100,10 @@ function App() {
     <UserCtx.Provider value={userCtxValue}>
     <FavCtx.Provider value={favCtxValue}>
     <div style={{
-      minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center',
+      minHeight:'100vh', display:'flex', justifyContent:'center',
       background:`radial-gradient(circle at 30% 0%, #1a2a6e 0%, #0a0e1f 70%)`,
-      padding:'40px 0',
     }}>
-      <IOSDevice dark>
+      <WebShell bg={t.bg}>
         <div style={{position:'absolute', inset:0, background: t.bg, zIndex:-1}}/>
         <div style={{position:'absolute', inset:0, background: t.bg}}>
           {/* The screen, animated on stack change */}
@@ -104,7 +119,7 @@ function App() {
             <BottomNav active={tabFor(top.route)} onNav={onTab} />
           )}
         </div>
-      </IOSDevice>
+      </WebShell>
 
       <TweaksPanel title="Tweaks">
         <TweakSection title="Theme">
