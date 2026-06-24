@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>PartyUp — find your game partner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Oswald:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; background: #08081a; overflow-x: hidden; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 0; height: 0; }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(14px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes slideInBack {
+    from { opacity: 0; transform: translateX(-14px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes tabSwap {
+    0%   { opacity: 0; transform: translateY(6px) scale(0.985); }
+    100% { opacity: 1; transform: translateY(0)   scale(1); }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.4); }
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes sheetUp {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
+  }
+  @keyframes msgIn {
+    from { opacity: 0; transform: translateY(8px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0)   scale(1); }
+  }
+  /* Game tile hover — lift, glow with accent, sheen sweep */
+  .game-tile {
+    border: none;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+    transition: transform .22s cubic-bezier(.2,.7,.2,1),
+                box-shadow .25s ease,
+                filter .25s ease;
+    will-change: transform;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .game-tile::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(115deg,
+      transparent 30%,
+      rgba(255,255,255,0.18) 48%,
+      rgba(255,255,255,0.04) 56%,
+      transparent 70%);
+    transform: translateX(-110%);
+    transition: transform .55s cubic-bezier(.2,.7,.2,1);
+    mix-blend-mode: screen;
+  }
+  .game-tile:hover {
+    transform: translateY(-4px) scale(1.035);
+    filter: saturate(1.15) brightness(1.08);
+    box-shadow:
+      0 14px 28px rgba(0,0,0,0.45),
+      0 0 0 1.5px var(--accent, #5B5CFF),
+      0 0 22px -2px var(--accent, #5B5CFF);
+  }
+  .game-tile:hover::after { transform: translateX(110%); }
+  .game-tile:active { transform: translateY(-1px) scale(0.98); transition-duration: .08s; }
+  @media (hover: none) {
+    .game-tile:hover { transform: none; filter: none; box-shadow: none; }
+    .game-tile:hover::after { transform: translateX(-110%); }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="ios-frame.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="visuals.jsx"></script>
+<script type="text/babel" src="screens.jsx"></script>
+<script type="text/babel" src="auth.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+</body>
+</html>
