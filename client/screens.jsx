@@ -694,7 +694,7 @@ function SessionDetailScreen({ nav, state }) {
               <video
                 controls muted playsInline poster=""
                 style={{ width: '100%', display: 'block', background: '#000', borderRadius: 14 }}
-                src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">
+                src="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4">
               </video>
               <div style={{ color: TH.dim2, fontSize: 11, marginTop: 6 }}>Game intro preview</div>
             </div>
@@ -829,14 +829,31 @@ function PostCard({ post, onChanged }) {
 function GroupChatPane({ session }) {
   const { userId } = React.useContext(window.UserCtx);
   const [draft, setDraft] = React.useState('');
-  const [tick, setTick] = React.useState(0);
-  const { data: msgs } = useApi(() => Api.chat.listForSession(session.id), [session.id, tick]);
+  const { data: history } = useApi(() => Api.chat.listForSession(session.id), [session.id]);
+  const [liveMsgs, setLiveMsgs] = React.useState([]);
   const scrollRef = React.useRef(null);
+
+  // Real-time delivery (spec 9.13/17/28) — joins the session's Socket.io room and
+  // streams new messages in; REST above only ever loads the existing history.
+  React.useEffect(() => {
+    setLiveMsgs([]);
+    return Api.chat.join(session.id, (msg) => {
+      setLiveMsgs((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+    });
+  }, [session.id]);
+
+  const knownIds = new Set((history || []).map((m) => m.id));
+  const msgs = [...(history || []), ...liveMsgs.filter((m) => !knownIds.has(m.id))];
 
   const send = () => {
     const v = draft.trim();
     if (!v) return;
-    Api.chat.send({ sessionId: session.id, content: v }).then(() => { setDraft(''); setTick((t) => t + 1); });
+    setDraft('');
+    // Socket path delivers the message back via the 'receiveMessage' listener above;
+    // the REST fallback (used if the socket isn't connected) returns it directly.
+    Api.chat.send({ sessionId: session.id, content: v }).then((res) => {
+      if (res) setLiveMsgs((prev) => (prev.some((m) => m.id === res.id) ? prev : [...prev, res]));
+    });
   };
 
   React.useEffect(() => {
@@ -1239,16 +1256,28 @@ window.HostLiveScreen = HostLiveScreen;
 // MY PROFILE
 // ════════════════════════════════════════════════════════════════════
 function MyProfileScreen({ nav }) {
+  const { userId, user, setUserId } = React.useContext(window.UserCtx);
   const [tab, setTab] = React.useState('most');
   const [sheet, setSheet] = React.useState(null); // 'menu' | 'see' | 'select' | 'edit' | 'settings'
-  // Profile state — initialized from ME, writes back so other screens stay in sync
-  const [me, setMe] = React.useState({ name: ME.name, flag: ME.flag, about: ME.about, palette: ME.palette || null });
+  // Profile state — seeded from the real logged-in user (name/about), falling back
+  // to the ME mock only for fields the backend doesn't model yet (flag, palette).
+  const [me, setMe] = React.useState({
+    name: (user && user.name) || ME.name,
+    flag: ME.flag,
+    about: (user && user.bio) || ME.about,
+    palette: ME.palette || null,
+  });
   const saveMe = (patch) => {
     setMe(m => {
       const next = { ...m, ...patch };
-      Object.assign(window.ME, next); // keep global mock data in sync
+      Object.assign(window.ME, next); // keep legacy mock-data readers (lobby defaults, etc.) in sync
       return next;
     });
+    // Persist the fields that exist on the User model (spec 11.1 — Update: Edit Profile).
+    const body = {};
+    if (patch.name !== undefined) body.username = patch.name;
+    if (patch.about !== undefined) body.bio = patch.about;
+    if (Object.keys(body).length) Api.users.update(userId, body).catch(() => {});
   };
   const list = tab === 'most' ? ME.mostPlayed : ME.recent;
   return (
@@ -1358,7 +1387,11 @@ function MyProfileScreen({ nav }) {
       {sheet === 'see' && <SeePictureOverlay me={me} onClose={() => setSheet(null)} />}
       {sheet === 'select' && <SelectPictureSheet me={me} onSave={(palette) => { saveMe({ palette }); setSheet(null); }} onClose={() => setSheet(null)} />}
       {sheet === 'edit' && <EditProfileSheet me={me} onSave={(patch) => { saveMe(patch); setSheet(null); }} onClose={() => setSheet(null)} />}
-      {sheet === 'settings' && <SettingsSheet onLogout={() => nav.reset('login')} onClose={() => setSheet(null)} />}
+      {sheet === 'settings' && <SettingsSheet onLogout={() => {
+        Api.auth.logout(); // clears the JWT and disconnects the chat socket — nav.reset alone left both alive
+        setUserId(null);
+        nav.reset('login');
+      }} onClose={() => setSheet(null)} />}
     </div>);
 
 }
@@ -1932,26 +1965,164 @@ function StatsDashboardScreen({ nav }) {
 }
 window.StatsDashboardScreen = StatsDashboardScreen;
 
-// Simple horizontal bar chart — no chart library needed, driven by live Api.stats data
+// Horizontal bar chart rendered with D3.js (spec section 18/29.i) — scales,
+// data-bound selections, and transitions drive an SVG; React only owns the layout.
+const BAR_ROW = 24, BAR_LABEL_W = 78, BAR_VALUE_W = 28, BAR_GAP = 10, BAR_TRACK_W = 200;
+const BAR_TOTAL_W = BAR_LABEL_W + BAR_GAP + BAR_TRACK_W + BAR_GAP + BAR_VALUE_W;
+
 function BarChart({ title, data, color }) {
-  const max = Math.max(1, ...data.map((d) => d.value));
+  const svgRef = React.useRef(null);
+  const height = Math.max(1, data.length) * BAR_ROW;
+  const trackX = BAR_LABEL_W + BAR_GAP;
+
+  React.useEffect(() => {
+    if (!svgRef.current || !data.length) return;
+    const svg = d3.select(svgRef.current);
+    const max = d3.max(data, (d) => d.value) || 1;
+    const x = d3.scaleLinear().domain([0, max]).range([0, BAR_TRACK_W]);
+    const y = d3.scaleBand().domain(d3.range(data.length)).range([0, height]).padding(0.3);
+
+    svg.selectAll('rect.bg').data(data).join('rect')
+      .attr('class', 'bg')
+      .attr('x', trackX).attr('y', (d, i) => y(i))
+      .attr('width', BAR_TRACK_W).attr('height', y.bandwidth())
+      .attr('rx', 6).attr('fill', 'rgba(255,255,255,0.06)');
+
+    svg.selectAll('rect.bar').data(data).join('rect')
+      .attr('class', 'bar')
+      .attr('x', trackX).attr('y', (d, i) => y(i))
+      .attr('height', y.bandwidth())
+      .attr('rx', 6).attr('fill', color)
+      .transition().duration(450).ease(d3.easeCubicOut)
+      .attr('width', (d) => Math.max(2, x(d.value)));
+
+    svg.selectAll('text.bar-label').data(data).join('text')
+      .attr('class', 'bar-label')
+      .attr('x', BAR_LABEL_W).attr('y', (d, i) => y(i) + y.bandwidth() / 2)
+      .attr('dy', '0.32em').attr('text-anchor', 'end')
+      .attr('fill', 'rgba(255,255,255,0.6)').attr('font-size', 11).attr('font-family', 'inherit')
+      .style('text-transform', 'capitalize')
+      .text((d) => d.label);
+
+    svg.selectAll('text.bar-value').data(data).join('text')
+      .attr('class', 'bar-value')
+      .attr('x', trackX + BAR_TRACK_W + BAR_VALUE_W).attr('y', (d, i) => y(i) + y.bandwidth() / 2)
+      .attr('dy', '0.32em').attr('text-anchor', 'end')
+      .attr('fill', '#fff').attr('font-size', 12).attr('font-weight', 700).attr('font-family', 'inherit')
+      .text((d) => d.value);
+  }, [data, color, height, trackX]);
+
   return (
     <div style={{ marginBottom: 26 }}>
       <div style={{ fontSize: 13, color: TH.dim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12, fontWeight: 600 }}>{title}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {data.length === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>No data yet.</div>}
-        {data.map((d, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 78, color: TH.dim, fontSize: 11.5, flexShrink: 0, textAlign: 'right', textTransform: 'capitalize' }}>{d.label}</div>
-            <div style={{ flex: 1, background: 'rgba(255,255,255,0.06)', borderRadius: 6, overflow: 'hidden', height: 16 }}>
-              <div style={{
-                width: `${(d.value / max) * 100}%`, height: '100%', background: color,
-                borderRadius: 6, transition: 'width .4s cubic-bezier(.2,.7,.2,1)'
-              }} />
+      {data.length === 0
+        ? <div style={{ color: TH.dim2, fontSize: 13 }}>No data yet.</div>
+        : <svg ref={svgRef} viewBox={`0 0 ${BAR_TOTAL_W} ${height}`} width="100%" height={height} />}
+    </div>);
+
+}
+
+// ════════════════════════════════════════════════════════════════════
+// MANAGE GAMES — host-only Create/Update/Delete on the Game model (spec 6.2 / 11.2)
+// ════════════════════════════════════════════════════════════════════
+function ManageGamesScreen({ nav }) {
+  const { user } = React.useContext(window.UserCtx);
+  const { data: games, loading } = useApi(() => Api.games.list({}), []);
+  const [showAdd, setShowAdd] = React.useState(false);
+  const [editingId, setEditingId] = React.useState(null);
+  const [, bump] = React.useState(0);
+  const refresh = () => bump((t) => t + 1);
+
+  if (!user || user.role !== 'host') {
+    return (
+      <ScreenScroll style={{ paddingTop: 50 }}>
+        <div style={{ padding: '0 26px', color: TH.dim, fontSize: 14 }}>Only hosts can manage the game catalog.</div>
+      </ScreenScroll>);
+  }
+
+  const remove = (id) => {
+    if (!window.confirm('Delete this game from the catalog?')) return;
+    Api.games.remove(id).then(refresh);
+  };
+
+  return (
+    <ScreenScroll style={{ paddingTop: 50 }}>
+      <div style={{ padding: '0 26px 40px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+          <h1 style={{ fontSize: 28, fontWeight: 600, color: '#fff', margin: 0, letterSpacing: '-0.02em' }}>Manage Games</h1>
+          <button onClick={() => setShowAdd((s) => !s)} style={{
+            background: TH.accent, border: 'none', color: '#fff', padding: '10px 16px',
+            borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
+          }}>{showAdd ? 'Cancel' : '+ Add game'}</button>
+        </div>
+
+        {showAdd &&
+        <GameForm
+          onSave={(data) => Api.games.create(data).then(() => { setShowAdd(false); refresh(); })}
+          onCancel={() => setShowAdd(false)}
+        />}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
+          {(games || []).map((g) => (
+            <div key={g.id} style={{ background: TH.card, border: '1px solid rgba(255,255,255,0.06)', borderRadius: 14, padding: 14 }}>
+              {editingId === g.id ?
+              <GameForm
+                initial={g}
+                onSave={(data) => Api.games.update(g.id, data).then(() => { setEditingId(null); refresh(); })}
+                onCancel={() => setEditingId(null)}
+              /> :
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: '#fff', fontWeight: 600, fontSize: 14 }}>{g.name}</div>
+                  <div style={{ color: TH.dim, fontSize: 12, marginTop: 2 }}>{g.genre || '—'} · {(g.platforms || []).join(', ') || '—'}</div>
+                </div>
+                <button onClick={() => setEditingId(g.id)} style={{ background: 'rgba(255,255,255,0.08)', border: 'none', color: '#fff', padding: '8px 12px', borderRadius: 10, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
+                <button onClick={() => remove(g.id)} style={{ background: 'rgba(255,107,107,0.12)', border: '1px solid rgba(255,107,107,0.3)', color: '#FF8080', padding: '8px 12px', borderRadius: 10, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
+              </div>}
             </div>
-            <div style={{ width: 22, color: '#fff', fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{d.value}</div>
-          </div>
+          ))}
+          {!loading && (games || []).length === 0 && <div style={{ color: TH.dim2, fontSize: 13 }}>No games yet — add one above.</div>}
+        </div>
+      </div>
+    </ScreenScroll>);
+
+}
+window.ManageGamesScreen = ManageGamesScreen;
+
+// Shared add/edit form for the Game model.
+function GameForm({ initial, onSave, onCancel }) {
+  const PLATFORM_OPTIONS = ['PC', 'PlayStation', 'Xbox', 'Switch', 'Mobile'];
+  const fieldStyle = {
+    width: '100%', boxSizing: 'border-box', background: 'rgba(255,255,255,0.04)',
+    border: '1px solid rgba(255,255,255,0.1)', color: '#fff', padding: '12px 14px',
+    borderRadius: 12, fontSize: 14, fontFamily: 'inherit', outline: 'none'
+  };
+  const [name, setName] = React.useState(initial ? initial.name : '');
+  const [genre, setGenre] = React.useState(initial ? (initial.genre || '') : '');
+  const [description, setDescription] = React.useState(initial ? (initial.description || '') : '');
+  const [platforms, setPlatforms] = React.useState(initial ? (initial.platforms || []) : []);
+  const togglePlatform = (p) => setPlatforms((ps) => ps.includes(p) ? ps.filter((x) => x !== p) : [...ps, p]);
+  const valid = name.trim().length >= 2;
+
+  return (
+    <div style={{ background: TH.card, border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14, padding: 16, marginBottom: 14 }}>
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Game name" style={fieldStyle} />
+      <input value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="Genre" style={{ ...fieldStyle, marginTop: 10 }} />
+      <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description" rows={2} style={{ ...fieldStyle, marginTop: 10, resize: 'none' }} />
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+        {PLATFORM_OPTIONS.map((p) => (
+          <button key={p} onClick={() => togglePlatform(p)} style={{
+            background: platforms.includes(p) ? TH.accent : 'rgba(255,255,255,0.06)',
+            border: 'none', color: '#fff', padding: '7px 12px', borderRadius: 99, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit'
+          }}>{p}</button>
         ))}
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+        <button disabled={!valid} onClick={() => onSave({ name: name.trim(), genre: genre.trim(), description: description.trim(), platforms })} style={{
+          flex: 1, background: valid ? TH.accent : 'rgba(255,255,255,0.1)', border: 'none', color: '#fff',
+          padding: '12px', borderRadius: 12, fontSize: 14, fontWeight: 600, cursor: valid ? 'pointer' : 'not-allowed', fontFamily: 'inherit'
+        }}>Save</button>
+        <button onClick={onCancel} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.14)', color: TH.dim, padding: '12px 16px', borderRadius: 12, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
       </div>
     </div>);
 

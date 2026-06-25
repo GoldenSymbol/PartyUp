@@ -29,4 +29,33 @@ async function getUser(req, res, next) {
   }
 }
 
-module.exports = { listUsers, getUser };
+// PUT /api/users/:id  (protected, own profile only)
+async function updateUser(req, res, next) {
+  try {
+    if (req.user._id.toString() !== req.params.id) {
+      return res.status(403).json({ error: 'You can only edit your own profile' });
+    }
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const { username, bio, avatarUrl, region, platform, skillLevel, favoriteGames } = req.body;
+    if (username && username !== user.username) {
+      const taken = await User.findOne({ username });
+      if (taken) return res.status(400).json({ error: 'Username is already taken' });
+      user.username = username;
+    }
+    if (bio !== undefined) user.bio = bio;
+    if (avatarUrl !== undefined) user.avatarUrl = avatarUrl;
+    if (region !== undefined) user.region = region;
+    if (platform !== undefined) user.platform = platform;
+    if (skillLevel !== undefined) user.skillLevel = skillLevel;
+    if (favoriteGames !== undefined) user.favoriteGames = favoriteGames;
+
+    await user.save();
+    res.json(await User.findById(user._id).select('-passwordHash'));
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { listUsers, getUser, updateUser };

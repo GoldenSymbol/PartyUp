@@ -23,6 +23,12 @@ async function sendMessage(req, res, next) {
       content,
     });
     const populated = await message.populate('senderId', 'username');
+
+    // Broadcast over Socket.io too, so members connected via the live chat
+    // room see REST-sent messages the same way as socket-sent ones.
+    const io = req.app.get('io');
+    if (io) io.to(`session:${req.params.sessionId}`).emit('receiveMessage', populated);
+
     res.status(201).json(populated);
   } catch (err) {
     next(err);

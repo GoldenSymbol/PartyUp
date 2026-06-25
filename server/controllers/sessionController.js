@@ -1,4 +1,6 @@
+const mongoose = require('mongoose');
 const Session = require('../models/Session');
+const Game = require('../models/Game');
 
 const POPULATE = [
   { path: 'gameId', select: 'name genre' },
@@ -25,7 +27,18 @@ async function searchSessions(req, res, next) {
   try {
     const { game, platform, region, skillLevel, mode, status, availability } = req.query;
     const filter = {};
-    if (game) filter.gameId = game; // Game _id
+    if (game) {
+      // Accept either a Game _id or a game name (e.g. "fortnite") so the
+      // route is usable without first looking up the game's ObjectId.
+      if (mongoose.Types.ObjectId.isValid(game)) {
+        filter.gameId = game;
+      } else {
+        const escaped = game.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const matchedGame = await Game.findOne({ name: new RegExp(`^${escaped}$`, 'i') });
+        if (!matchedGame) return res.json([]);
+        filter.gameId = matchedGame._id;
+      }
+    }
     if (platform) filter.platform = platform;
     if (region) filter.region = region;
     if (skillLevel) filter.skillLevel = skillLevel;

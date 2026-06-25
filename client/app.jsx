@@ -39,8 +39,11 @@ const EXTRA_NAV_ITEMS = [
 { id: 'mysessions', label: 'My Sessions', icon: (s, c) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="9" cy="9" r="3.5" stroke={c} strokeWidth="1.8" /><circle cx="17" cy="10" r="2.5" stroke={c} strokeWidth="1.8" /><path d="M3 19c1-3 3.3-4.5 6-4.5s5 1.5 6 4.5" stroke={c} strokeWidth="1.8" strokeLinecap="round" /></svg> },
 { id: 'stats', label: 'Statistics', icon: (s, c) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M4 20V10M11 20V4M18 20v-7" stroke={c} strokeWidth="1.8" strokeLinecap="round" /></svg> }];
 
+// Host-only — game catalog management (spec 6.2/11.2: Create/Update/Delete on the Game model).
+const HOST_NAV_ITEMS = [
+{ id: 'managegames', label: 'Manage Games', icon: (s, c) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2" stroke={c} strokeWidth="1.8" /><path d="M8 9v6M5 12h6M14.5 12h4" stroke={c} strokeWidth="1.8" strokeLinecap="round" /></svg> }];
 
-function Sidebar({ active, onNav }) {
+function Sidebar({ active, onNav, isHost }) {
   const rowStyle = (isActive) => ({
     display: 'flex', alignItems: 'center', gap: 12, width: '100%',
     background: isActive ? 'rgba(91,92,255,0.16)' : 'transparent',
@@ -48,6 +51,7 @@ function Sidebar({ active, onNav }) {
     color: isActive ? '#fff' : TH.dim, fontFamily: 'inherit', fontSize: 14, fontWeight: 600,
     textAlign: 'left', transition: 'background .15s, color .15s'
   });
+  const extraItems = isHost ? [...EXTRA_NAV_ITEMS, ...HOST_NAV_ITEMS] : EXTRA_NAV_ITEMS;
   return (
     <div className="pu-sidebar" style={{
       /* no inline `display` — the .pu-sidebar class owns show/hide per breakpoint
@@ -77,7 +81,7 @@ function Sidebar({ active, onNav }) {
           </button>
         ))}
         <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '10px 4px' }} />
-        {EXTRA_NAV_ITEMS.map((it) => (
+        {extraItems.map((it) => (
           <button key={it.id} onClick={() => onNav(it.id)} style={rowStyle(active === it.id)}>
             {it.icon(20, active === it.id ? '#fff' : TH.dim)}
             {it.label}
@@ -113,7 +117,7 @@ function TopHeader({ user }) {
 function DesktopShell({ bg, user, active, onNav, routeKey, animation, showMobileNav, children }) {
   return (
     <div style={{ width: '100%', minHeight: '100vh', background: bg, display: 'flex' }}>
-      <Sidebar active={active} onNav={onNav} />
+      <Sidebar active={active} onNav={onNav} isHost={user && user.role === 'host'} />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
         <TopHeader user={user} />
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
@@ -202,6 +206,7 @@ function App() {
       case 'fav':           return <FavoritesScreen    nav={nav} />;
       case 'mysessions':    return <MySessionsScreen   nav={nav} />;
       case 'stats':         return <StatsDashboardScreen nav={nav} />;
+      case 'managegames':   return <ManageGamesScreen   nav={nav} />;
       default: return null;
     }
   })();

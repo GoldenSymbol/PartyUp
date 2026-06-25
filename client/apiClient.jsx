@@ -34,6 +34,29 @@ function setToken(token) {
   } catch (e) { /* localStorage unavailable — token just won't persist across reloads */ }
 }
 
+// ─── Socket.io — real-time chat transport (spec section 17/28). REST under
+// /chat/:sessionId/messages still loads history; this carries live messages. ──
+const SOCKET_BASE = API_BASE.replace(/\/api\/?$/, '');
+let socket = null;
+const joinedRooms = new Set();
+function getSocket() {
+  if (!socket) {
+    socket = io(SOCKET_BASE, { autoConnect: false });
+    // Rooms are per-connection server-side, so reconnects (network blips) need to rejoin.
+    socket.on('connect', () => joinedRooms.forEach((sessionId) => socket.emit('joinRoom', sessionId)));
+  }
+  return socket;
+}
+function connectSocket() {
+  const s = getSocket();
+  s.auth = { token: getToken() };
+  if (!s.connected) s.connect();
+  return s;
+}
+function disconnectSocket() {
+  if (socket && socket.connected) socket.disconnect();
+}
+
 // jQuery $.ajax wrapper — every Api call (read or write) flows through this.
 function request(path, { method = 'GET', body } = {}) {
   return new Promise((resolve, reject) => {
@@ -155,6 +178,7 @@ const Api = {
     async login(identifier, password) {
       const data = await request('/auth/login', { method: 'POST', body: { identifier, password } });
       setToken(data.token);
+      connectSocket();
       const user = normalizeUser(data.user);
       window.CURRENT_USER_ID = user.id;
       upsertById(USERS, user);
@@ -163,12 +187,14 @@ const Api = {
     async me() {
       if (!getToken()) return null;
       const data = await request('/auth/me');
+      connectSocket();
       const user = normalizeUser(data);
       upsertById(USERS, user);
       return user;
     },
     logout() {
       setToken(null);
+      disconnectSocket();
     },
   },
 
@@ -181,6 +207,21 @@ const Api = {
     async get(id) {
       const data = await request(`/games/${id}`);
       return upsertById(GAMES, normalizeGame(data));
+    },
+    // Catalog management (spec 6.2/11.2) — hosts only, enforced server-side too.
+    async create(data) {
+      const res = await request('/games', { method: 'POST', body: data });
+      return upsertById(GAMES, normalizeGame(res));
+    },
+    async update(id, patch) {
+      const res = await request(`/games/${id}`, { method: 'PUT', body: patch });
+      return upsertById(GAMES, normalizeGame(res));
+    },
+    async remove(id) {
+      await request(`/games/${id}`, { method: 'DELETE' });
+      const idx = GAMES.findIndex((g) => g.id === id);
+      if (idx >= 0) GAMES.splice(idx, 1);
+      return true;
     },
   },
 
@@ -214,19 +255,26 @@ const Api = {
       upsertById(USERS, user);
       return user;
     },
+    // Edit Profile (spec 9.14 / 11.1) — persists to MongoDB; own profile only (enforced server-side too).
+    async update(id, patch) {
+      const res = await request(`/users/${id}`, { method: 'PUT', body: patch });
+      return upsertById(USERS, normalizeUser(res));
+    },
   },
 
   sessions: {
-    async list({ gameId, platform, region, skillLevel, mode, availability } = {}) {
+    async list({ gameId, platform, region, skillLevel, mode, status, availability } = {}) {
       const params = new URLSearchParams();
       if (gameId) params.set('game', gameId);
       if (platform) params.set('platform', platform);
       if (region) params.set('region', region);
       if (skillLevel) params.set('skillLevel', skillLevel);
       if (mode) params.set('mode', mode);
+      if (status) params.set('status', status);
       if (availability) params.set('availability', availability);
-      const qs = params.toString() ? `?${params.toString()}` : '';
-      const data = await request(`/sessions/search${qs}`);
+      // No filters → the plain list route; otherwise the search route.
+      const qs = params.toString();
+      const data = await request(qs ? `/sessions/search?${qs}` : '/sessions');
       return mergeMany(SESSIONS, data.map(normalizeSession));
     },
     async get(id) {
@@ -321,13 +369,35 @@ const Api = {
   },
 
   chat: {
+    // History still loads over REST/MongoDB (spec 9.13) — sockets only carry live messages.
     async listForSession(sessionId) {
       const data = await request(`/chat/${sessionId}/messages`);
       return data.map(normalizeMessage);
     },
+    // Sends over the live Socket.io room when connected (server persists + broadcasts);
+    // falls back to the REST endpoint — which also broadcasts — if the socket isn't up.
     async send({ sessionId, content }) {
+      const s = connectSocket();
+      if (s.connected) {
+        s.emit('sendMessage', { sessionId, content });
+        return null;
+      }
       const res = await request(`/chat/${sessionId}/messages`, { method: 'POST', body: { content } });
       return normalizeMessage(res);
+    },
+    // Joins the session's chat room and streams incoming messages to onMessage.
+    // Returns an unsubscribe function that also leaves the room.
+    join(sessionId, onMessage) {
+      const s = connectSocket();
+      const handler = (msg) => onMessage(normalizeMessage(msg));
+      joinedRooms.add(sessionId);
+      s.emit('joinRoom', sessionId);
+      s.on('receiveMessage', handler);
+      return () => {
+        joinedRooms.delete(sessionId);
+        s.off('receiveMessage', handler);
+        s.emit('leaveRoom', sessionId);
+      };
     },
   },
 
