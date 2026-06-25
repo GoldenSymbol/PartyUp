@@ -1,9 +1,17 @@
 const User = require('../models/User');
 
-// GET /api/users
+// GET /api/users?q=&region=&platform=&skillLevel=&favoriteGame=
 async function listUsers(req, res, next) {
   try {
-    const users = await User.find().select('-passwordHash');
+    const { q, region, platform, skillLevel, favoriteGame } = req.query;
+    const filter = {};
+    if (q) filter.username = { $regex: q, $options: 'i' };
+    if (region) filter.region = region;
+    if (platform) filter.platform = platform;
+    if (skillLevel) filter.skillLevel = skillLevel;
+    if (favoriteGame) filter.favoriteGames = favoriteGame;
+
+    const users = await User.find(filter).select('-passwordHash');
     res.json(users);
   } catch (err) {
     next(err);

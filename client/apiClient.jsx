@@ -1,258 +1,357 @@
 // ════════════════════════════════════════════════════════════════════
-// apiClient — single chokepoint for all "server" data access.
-// Everything here is mocked against the in-memory arrays from data.jsx,
-// but every call returns a Promise so screens already talk to it the
-// same way they will talk to the real Node/Express/MongoDB API later
-// (see Docs/PartyUp Project Specification.pdf section 23 for the
-// matching REST endpoint list this mirrors).
+// apiClient — single chokepoint for all server data access.
+// Phase 2: this now talks to the real Node/Express/MongoDB API at
+// API_BASE instead of the in-memory mock arrays. Every call still goes
+// through jQuery's $.ajax (spec section 20 — "JQuery Ajax sends GET/POST
+// request to server... Response returns JSON... Client updates the UI"),
+// just pointed at the real server now instead of the static games.json
+// stand-in used before the backend existed.
+//
+// Screens never talk to the network directly — they only call Api.* and
+// useApi(), exactly as before, so nothing in screens.jsx/auth.jsx/app.jsx
+// had to change for this swap except the two auth submit handlers that
+// now need to actually send the password the form already collects.
+//
+// Backend responses use Mongo's `_id` and (for sessions) populate some
+// references for convenience. The normalize* helpers below translate
+// that back into the flat {id, ...} shape the existing screens already
+// expect (the same shape data.jsx's mock arrays used), and keep the
+// global GAMES/USERS/SESSIONS arrays from data.jsx in sync so the
+// synchronous gameById()/userById()/SESSIONS.find() lookups sprinkled
+// through the screens keep working unchanged.
 // ════════════════════════════════════════════════════════════════════
 
-function apiDelay(value, ms = 80) {
-  return new Promise((resolve) => setTimeout(() => resolve(value), ms));
+const API_BASE = window.PARTYUP_API_BASE || 'http://localhost:5000/api';
+const TOKEN_KEY = 'partyup_token';
+
+function getToken() {
+  try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; }
+}
+function setToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch (e) { /* localStorage unavailable — token just won't persist across reloads */ }
 }
 
-function nextId(prefix, list) {
-  return prefix + (list.reduce((max, x) => Math.max(max, parseInt(String(x.id).replace(/\D/g, ''), 10) || 0), 0) + 1);
+// jQuery $.ajax wrapper — every Api call (read or write) flows through this.
+function request(path, { method = 'GET', body } = {}) {
+  return new Promise((resolve, reject) => {
+    const token = getToken();
+    $.ajax({
+      url: API_BASE + path,
+      method,
+      dataType: 'json',
+      contentType: body !== undefined ? 'application/json' : undefined,
+      data: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+    })
+      .done((data) => resolve(data))
+      .fail((xhr) => {
+        const message = (xhr.responseJSON && xhr.responseJSON.error) || `Request failed: ${xhr.status}`;
+        reject(new Error(message));
+      });
+  });
 }
 
-function sessionWithStatus(s) {
-  return { ...s, status: s.members.length >= s.maxPlayers ? 'full' : s.status };
+// ─── Normalization: backend shape → the flat {id,...} shape screens expect ──
+function idOf(ref) {
+  if (!ref) return null;
+  return typeof ref === 'object' ? ref._id : ref;
+}
+function shortDate(iso) {
+  return iso ? String(iso).slice(0, 10) : '';
+}
+
+// Cosmetic fields (title/sub/bg/accent/vibe) are purely a frontend concern —
+// the backend Game model only stores name/genre/platforms/description, so
+// GameCover's styling is mapped here by name, same values data.jsx used to
+// ship inline. Unknown games fall back to a generic tile.
+const GAME_VISUALS = {
+  'valorant': { title: 'VALORANT', sub: '', bg: 'linear-gradient(135deg,#ff4655 0%,#7a1a22 100%)', accent: '#0f1923', vibe: 'tactical' },
+  'fortnite': { title: 'FORTNITE', sub: '', bg: 'linear-gradient(180deg,#7e3ff2 0%,#1d0a52 100%)', accent: '#00d4ff', vibe: 'storm' },
+  'minecraft': { title: 'MINECRAFT', sub: '', bg: 'linear-gradient(180deg,#4a8a3a 0%,#1f4218 100%)', accent: '#9BD66B', vibe: 'pixel' },
+  'fifa': { title: 'FIFA', sub: '', bg: 'linear-gradient(160deg,#0a3a1a 0%,#021a0a 100%)', accent: '#4ADE80', vibe: '' },
+  'league of legends': { title: 'LEAGUE OF', sub: 'LEGENDS', bg: 'linear-gradient(180deg,#0a3a6e 0%,#020c1f 100%)', accent: '#C8A765', vibe: 'crest' },
+  'rocket league': { title: 'ROCKET', sub: 'LEAGUE', bg: 'linear-gradient(135deg,#FF7A18 0%,#1a0a3a 70%,#05010a 100%)', accent: '#3FA8FF', vibe: 'storm' },
+  'apex legends': { title: 'APEX', sub: 'LEGENDS', bg: 'linear-gradient(180deg,#c4a014 0%,#1a1408 100%)', accent: '#E8C547', vibe: 'apex' },
+  'call of duty': { title: 'WARZONE', sub: 'CALL OF DUTY', bg: 'linear-gradient(160deg,#3a4a3a 0%,#1a201a 60%,#0a0e0a 100%)', accent: '#8FA37A', vibe: 'military' },
+};
+function visualsFor(name) {
+  return GAME_VISUALS[String(name || '').toLowerCase()] || {
+    title: String(name || '').toUpperCase(), sub: '',
+    bg: 'linear-gradient(160deg,#2a2a3a 0%,#0a0a12 100%)', accent: '#5B5CFF', vibe: '',
+  };
+}
+
+function normalizeGame(g) {
+  if (!g) return null;
+  const v = visualsFor(g.name);
+  return {
+    id: g._id, name: g.name, title: v.title, sub: v.sub, bg: v.bg, accent: v.accent, vibe: v.vibe,
+    genre: g.genre, platforms: g.platforms, description: g.description, popularityScore: g.popularityScore,
+  };
+}
+function normalizeUser(u) {
+  if (!u) return null;
+  return {
+    id: u._id, name: u.username, username: u.username, email: u.email,
+    role: u.role, platform: u.platform, region: u.region, skillLevel: u.skillLevel,
+    favoriteGames: (u.favoriteGames || []).map(idOf),
+  };
+}
+function normalizeSession(s) {
+  if (!s) return null;
+  return {
+    id: s._id, title: s.title, gameId: idOf(s.gameId), hostId: idOf(s.hostId),
+    platform: s.platform, region: s.region, mode: s.mode, skillLevel: s.skillLevel,
+    description: s.description, maxPlayers: s.maxPlayers,
+    members: (s.members || []).map(idOf),
+    privacy: s.privacy, status: s.status, startTime: s.startTime,
+    createdAt: shortDate(s.createdAt),
+  };
+}
+function normalizePost(p) {
+  if (!p) return null;
+  return {
+    id: p._id, authorId: idOf(p.authorId), sessionId: idOf(p.sessionId),
+    content: p.content, likes: p.likes, comments: p.comments, createdAt: shortDate(p.createdAt),
+  };
+}
+function normalizeRequest(r) {
+  if (!r) return null;
+  return {
+    id: r._id, userId: idOf(r.userId), sessionId: idOf(r.sessionId),
+    status: r.status, message: r.message, createdAt: shortDate(r.createdAt),
+  };
+}
+function normalizeMessage(m) {
+  if (!m) return null;
+  return { id: m._id, sessionId: idOf(m.sessionId), senderId: idOf(m.senderId), content: m.content, createdAt: m.createdAt };
+}
+
+// ─── Cache sync: keep the global GAMES/USERS/SESSIONS arrays (from
+// data.jsx) merged with whatever the backend just returned, so the
+// synchronous gameById()/userById()/SESSIONS.find() call sites elsewhere
+// in screens.jsx keep resolving correctly without being rewritten. Merge
+// (not replace) so a filtered fetch never evicts entries a different
+// screen already cached. ──
+function upsertById(arr, item) {
+  if (!item) return item;
+  const idx = arr.findIndex((x) => x.id === item.id);
+  if (idx >= 0) arr[idx] = item;
+  else arr.push(item);
+  return item;
+}
+function mergeMany(arr, items) {
+  items.forEach((item) => upsertById(arr, item));
+  return items;
 }
 
 const Api = {
   auth: {
-    // Demo "login" — resolves an identifier (email or username) to one of
-    // the seeded demo users; falls back to Menalu (the regular-user demo account).
-    login(identifier) {
-      const handle = String(identifier || '').split('@')[0].trim().toLowerCase();
-      const match = USERS.find((u) => u.name.toLowerCase() === handle || u.id === handle);
-      window.CURRENT_USER_ID = match ? match.id : 'menalu';
-      return apiDelay(userById(window.CURRENT_USER_ID));
+    // identifier = email or username; password is required by the real backend
+    // (the old mock accepted any password — see auth.jsx for the matching change).
+    async login(identifier, password) {
+      const data = await request('/auth/login', { method: 'POST', body: { identifier, password } });
+      setToken(data.token);
+      const user = normalizeUser(data.user);
+      window.CURRENT_USER_ID = user.id;
+      upsertById(USERS, user);
+      return user;
     },
-    me() {
-      return apiDelay(userById(window.CURRENT_USER_ID));
+    async me() {
+      if (!getToken()) return null;
+      const data = await request('/auth/me');
+      const user = normalizeUser(data);
+      upsertById(USERS, user);
+      return user;
+    },
+    logout() {
+      setToken(null);
     },
   },
 
   games: {
-    // Uses jQuery's $.ajax to GET the games catalog (spec section 20 — "Loading games list").
-    // games.json today is a static file standing in for the future GET /api/games endpoint;
-    // falls back to the in-memory seed if the request fails (e.g. opened without a dev server).
-    list({ q } = {}) {
-      const term = (q || '').toLowerCase();
-      const filterAndWrap = (list) => apiDelay(list.filter((g) => !term || (g.title + ' ' + g.sub).toLowerCase().includes(term)));
-      if (typeof $ === 'undefined') return filterAndWrap(GAMES);
-      return new Promise((resolve) => {
-        $.ajax({ url: 'games.json', dataType: 'json', method: 'GET' })
-          .done((data) => filterAndWrap(data).then(resolve))
-          .fail(() => filterAndWrap(GAMES).then(resolve));
-      });
+    async list({ q } = {}) {
+      const qs = q ? `?q=${encodeURIComponent(q)}` : '';
+      const data = await request(`/games${qs}`);
+      return mergeMany(GAMES, data.map(normalizeGame));
     },
-    get(id) {
-      return apiDelay(gameById(id));
+    async get(id) {
+      const data = await request(`/games/${id}`);
+      return upsertById(GAMES, normalizeGame(data));
     },
   },
 
   users: {
-    list({ q, region, platform, skillLevel, favoriteGame } = {}) {
-      const term = (q || '').toLowerCase();
-      const result = USERS.filter((u) =>
-        (!term || u.name.toLowerCase().includes(term)) &&
-        (!region || u.region === region) &&
-        (!platform || u.platform === platform) &&
-        (!skillLevel || u.skillLevel === skillLevel) &&
-        (!favoriteGame || u.favoriteGames.includes(favoriteGame))
-      );
-      return apiDelay(result);
+    async list({ q, region, platform, skillLevel, favoriteGame } = {}) {
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (region) params.set('region', region);
+      if (platform) params.set('platform', platform);
+      if (skillLevel) params.set('skillLevel', skillLevel);
+      if (favoriteGame) params.set('favoriteGame', favoriteGame);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const data = await request(`/users${qs}`);
+      return mergeMany(USERS, data.map(normalizeUser));
     },
-    get(id) {
-      return apiDelay(userById(id));
+    async get(id) {
+      const data = await request(`/users/${id}`);
+      return upsertById(USERS, normalizeUser(data));
     },
-    create(data) {
-      const user = {
-        id: nextId('u', USERS).toLowerCase(),
-        name: data.name,
-        role: 'regular',
-        platform: data.platform,
-        region: data.region,
-        skillLevel: data.skillLevel,
+    // Registration — the "create a user" mock action now means a real account.
+    async create(data) {
+      const body = {
+        username: data.name, email: data.email, password: data.password,
+        region: data.region, platform: data.platform, skillLevel: data.skillLevel,
         favoriteGames: data.favoriteGames || [],
       };
-      USERS.push(user);
-      return apiDelay(user);
+      const res = await request('/auth/register', { method: 'POST', body });
+      setToken(res.token);
+      const user = normalizeUser(res.user);
+      window.CURRENT_USER_ID = user.id;
+      upsertById(USERS, user);
+      return user;
     },
   },
 
   sessions: {
-    list({ gameId, platform, region, skillLevel, mode, availability } = {}) {
-      const result = SESSIONS.filter((s) =>
-        (!gameId || s.gameId === gameId) &&
-        (!platform || s.platform === platform) &&
-        (!region || s.region === region) &&
-        (!skillLevel || s.skillLevel === skillLevel) &&
-        (!mode || s.mode === mode) &&
-        (!availability || availability === 'any' || (availability === 'open' ? s.members.length < s.maxPlayers : true))
-      ).map(sessionWithStatus);
-      return apiDelay(result);
+    async list({ gameId, platform, region, skillLevel, mode, availability } = {}) {
+      const params = new URLSearchParams();
+      if (gameId) params.set('game', gameId);
+      if (platform) params.set('platform', platform);
+      if (region) params.set('region', region);
+      if (skillLevel) params.set('skillLevel', skillLevel);
+      if (mode) params.set('mode', mode);
+      if (availability) params.set('availability', availability);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const data = await request(`/sessions/search${qs}`);
+      return mergeMany(SESSIONS, data.map(normalizeSession));
     },
-    get(id) {
-      const s = SESSIONS.find((x) => x.id === id);
-      return apiDelay(s ? sessionWithStatus(s) : null);
+    async get(id) {
+      const data = await request(`/sessions/${id}`);
+      return upsertById(SESSIONS, normalizeSession(data));
     },
-    create(data) {
-      const session = {
-        id: nextId('s', SESSIONS),
-        title: data.title,
-        gameId: data.gameId,
-        hostId: window.CURRENT_USER_ID,
-        platform: data.platform,
-        region: data.region,
-        mode: data.mode,
-        skillLevel: data.skillLevel,
-        description: data.description || '',
-        maxPlayers: data.maxPlayers,
-        members: [window.CURRENT_USER_ID],
-        privacy: data.privacy,
-        status: 'open',
-        startTime: data.startTime || 'Flexible',
-        createdAt: new Date().toISOString().slice(0, 10),
+    async create(data) {
+      const body = {
+        title: data.title, gameId: data.gameId, platform: data.platform, region: data.region,
+        mode: data.mode, skillLevel: data.skillLevel, description: data.description,
+        maxPlayers: data.maxPlayers, privacy: data.privacy, startTime: data.startTime,
       };
-      SESSIONS.unshift(session);
-      return apiDelay(session);
+      const res = await request('/sessions', { method: 'POST', body });
+      return upsertById(SESSIONS, normalizeSession(res));
     },
-    update(id, patch) {
-      const s = SESSIONS.find((x) => x.id === id);
-      if (s) Object.assign(s, patch);
-      return apiDelay(s);
+    async update(id, patch) {
+      const res = await request(`/sessions/${id}`, { method: 'PUT', body: patch });
+      return upsertById(SESSIONS, normalizeSession(res));
     },
-    remove(id) {
+    async remove(id) {
+      await request(`/sessions/${id}`, { method: 'DELETE' });
       const idx = SESSIONS.findIndex((x) => x.id === id);
       if (idx >= 0) SESSIONS.splice(idx, 1);
-      return apiDelay(true);
+      return true;
     },
-    // Public sessions join instantly; private sessions go through requests.create() instead.
-    join(id) {
-      const s = SESSIONS.find((x) => x.id === id);
-      if (s && !s.members.includes(window.CURRENT_USER_ID) && s.members.length < s.maxPlayers) {
-        s.members.push(window.CURRENT_USER_ID);
-      }
-      return apiDelay(s ? sessionWithStatus(s) : null);
+    async join(id) {
+      const res = await request(`/sessions/${id}/join`, { method: 'POST' });
+      return upsertById(SESSIONS, normalizeSession(res));
     },
-    leave(id) {
-      const s = SESSIONS.find((x) => x.id === id);
-      if (s) s.members = s.members.filter((m) => m !== window.CURRENT_USER_ID);
-      return apiDelay(s ? sessionWithStatus(s) : null);
+    async leave(id) {
+      const res = await request(`/sessions/${id}/leave`, { method: 'POST' });
+      return upsertById(SESSIONS, normalizeSession(res));
     },
-    removeMember(id, userId) {
-      const s = SESSIONS.find((x) => x.id === id);
-      if (s) s.members = s.members.filter((m) => m !== userId);
-      return apiDelay(s ? sessionWithStatus(s) : null);
+    async removeMember(id, userId) {
+      const res = await request(`/sessions/${id}/members/${userId}`, { method: 'DELETE' });
+      return upsertById(SESSIONS, normalizeSession(res));
     },
   },
 
   requests: {
-    listForSession(sessionId) {
-      return apiDelay(JOIN_REQUESTS.filter((r) => r.sessionId === sessionId));
+    async listForSession(sessionId) {
+      const data = await request(`/requests/session/${sessionId}`);
+      return data.map(normalizeRequest);
     },
-    listForUser(userId) {
-      return apiDelay(JOIN_REQUESTS.filter((r) => r.userId === userId));
+    // userId kept in the signature for interface parity with the old mock —
+    // the backend now derives "my" requests from the JWT, not a client-supplied id.
+    async listForUser(userId) {
+      const data = await request('/requests/my');
+      return data.map(normalizeRequest);
     },
-    create({ sessionId, message }) {
-      const existing = JOIN_REQUESTS.find((r) => r.sessionId === sessionId && r.userId === window.CURRENT_USER_ID && r.status === 'pending');
-      if (existing) return apiDelay(existing);
-      const req = { id: nextId('jr', JOIN_REQUESTS), userId: window.CURRENT_USER_ID, sessionId, status: 'pending', message: message || '', createdAt: new Date().toISOString().slice(0, 10) };
-      JOIN_REQUESTS.unshift(req);
-      return apiDelay(req);
+    async create({ sessionId, message }) {
+      const res = await request('/requests', { method: 'POST', body: { sessionId, message } });
+      return normalizeRequest(res);
     },
-    approve(id) {
-      const r = JOIN_REQUESTS.find((x) => x.id === id);
-      if (r) {
-        r.status = 'approved';
-        const s = SESSIONS.find((x) => x.id === r.sessionId);
-        if (s && !s.members.includes(r.userId)) s.members.push(r.userId);
-      }
-      return apiDelay(r);
+    async approve(id) {
+      const res = await request(`/requests/${id}/approve`, { method: 'PUT' });
+      const sid = idOf(res.sessionId);
+      if (sid) Api.sessions.get(sid).catch(() => {}); // refresh the session's member list in the cache
+      return normalizeRequest(res);
     },
-    reject(id) {
-      const r = JOIN_REQUESTS.find((x) => x.id === id);
-      if (r) r.status = 'rejected';
-      return apiDelay(r);
+    async reject(id) {
+      const res = await request(`/requests/${id}/reject`, { method: 'PUT' });
+      return normalizeRequest(res);
     },
-    remove(id) {
-      const idx = JOIN_REQUESTS.findIndex((x) => x.id === id);
-      if (idx >= 0) JOIN_REQUESTS.splice(idx, 1);
-      return apiDelay(true);
+    async remove(id) {
+      await request(`/requests/${id}`, { method: 'DELETE' });
+      return true;
     },
   },
 
   posts: {
-    listForSession(sessionId) {
-      return apiDelay(POSTS.filter((p) => p.sessionId === sessionId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    async listForSession(sessionId) {
+      const data = await request(`/posts?sessionId=${sessionId}`);
+      return data.map(normalizePost);
     },
-    // Home feed: posts from sessions the user joined, plus posts about their favorite games.
-    listFeedForUser(userId) {
-      const user = userById(userId);
-      const mySessionIds = SESSIONS.filter((s) => s.members.includes(userId)).map((s) => s.id);
-      const result = POSTS.filter((p) => {
-        const session = SESSIONS.find((s) => s.id === p.sessionId);
-        if (!session) return false;
-        const aboutFavoriteGame = user && user.favoriteGames.includes(session.gameId);
-        return mySessionIds.includes(p.sessionId) || session.privacy === 'public' || aboutFavoriteGame;
-      }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      return apiDelay(result);
+    async listFeedForUser(userId) {
+      const data = await request(`/posts?feedFor=${userId}`);
+      return data.map(normalizePost);
     },
-    create({ sessionId, content }) {
-      const post = { id: nextId('p', POSTS), authorId: window.CURRENT_USER_ID, sessionId, content, likes: 0, comments: 0, createdAt: new Date().toISOString().slice(0, 10) };
-      POSTS.unshift(post);
-      return apiDelay(post);
+    async create({ sessionId, content }) {
+      const res = await request('/posts', { method: 'POST', body: { sessionId, content } });
+      return normalizePost(res);
     },
-    update(id, patch) {
-      const p = POSTS.find((x) => x.id === id);
-      if (p && p.authorId === window.CURRENT_USER_ID) Object.assign(p, patch);
-      return apiDelay(p);
+    async update(id, patch) {
+      const res = await request(`/posts/${id}`, { method: 'PUT', body: patch });
+      return normalizePost(res);
     },
-    remove(id) {
-      const idx = POSTS.findIndex((x) => x.id === id && x.authorId === window.CURRENT_USER_ID);
-      if (idx >= 0) POSTS.splice(idx, 1);
-      return apiDelay(true);
+    async remove(id) {
+      await request(`/posts/${id}`, { method: 'DELETE' });
+      return true;
     },
   },
 
   chat: {
-    listForSession(sessionId) {
-      return apiDelay(CHAT_MESSAGES.filter((m) => m.sessionId === sessionId).sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+    async listForSession(sessionId) {
+      const data = await request(`/chat/${sessionId}/messages`);
+      return data.map(normalizeMessage);
     },
-    send({ sessionId, content }) {
-      const msg = { id: nextId('m', CHAT_MESSAGES), sessionId, senderId: window.CURRENT_USER_ID, content, createdAt: new Date().toISOString() };
-      CHAT_MESSAGES.push(msg);
-      return apiDelay(msg, 30);
+    async send({ sessionId, content }) {
+      const res = await request(`/chat/${sessionId}/messages`, { method: 'POST', body: { content } });
+      return normalizeMessage(res);
     },
   },
 
   stats: {
     postsPerMonth() {
-      const byMonth = {};
-      POSTS.forEach((p) => {
-        const key = p.createdAt.slice(0, 7);
-        byMonth[key] = (byMonth[key] || 0) + 1;
-      });
-      return apiDelay(Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b)).map(([month, count]) => ({ month, count })));
+      return request('/stats/posts-per-month');
     },
-    sessionsPerGame() {
-      const byGame = {};
-      SESSIONS.forEach((s) => { byGame[s.gameId] = (byGame[s.gameId] || 0) + 1; });
-      return apiDelay(Object.entries(byGame).map(([gameId, count]) => ({ gameId, game: gameById(gameId), count })).sort((a, b) => b.count - a.count));
+    async sessionsPerGame() {
+      const data = await request('/stats/sessions-per-game');
+      return data.map((d) => ({ gameId: d.gameId, game: d.game ? { title: d.game } : null, count: d.count }));
     },
     usersByPlatform() {
-      const byPlatform = {};
-      USERS.forEach((u) => { byPlatform[u.platform] = (byPlatform[u.platform] || 0) + 1; });
-      return apiDelay(Object.entries(byPlatform).map(([platform, count]) => ({ platform, count })));
+      return request('/stats/users-by-platform');
     },
     requestsByStatus() {
-      const byStatus = { pending: 0, approved: 0, rejected: 0 };
-      JOIN_REQUESTS.forEach((r) => { byStatus[r.status] = (byStatus[r.status] || 0) + 1; });
-      return apiDelay(Object.entries(byStatus).map(([status, count]) => ({ status, count })));
+      return request('/stats/requests-by-status');
     },
+  },
+
+  // Fetches the public catalogs (games + users) once up front so synchronous
+  // lookups (gameById/userById, GAMES.map in RegisterScreen, etc.) have real
+  // data before the first meaningful render — see the boot gate in app.jsx.
+  async bootstrap() {
+    await Promise.all([Api.games.list({}), Api.users.list({})]);
   },
 };
 window.Api = Api;

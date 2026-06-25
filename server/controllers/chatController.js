@@ -12,4 +12,21 @@ async function getMessages(req, res, next) {
   }
 }
 
-module.exports = { getMessages };
+// POST /api/chat/:sessionId/messages  (protected)
+async function sendMessage(req, res, next) {
+  try {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: 'content is required' });
+    const message = await ChatMessage.create({
+      sessionId: req.params.sessionId,
+      senderId: req.user._id,
+      content,
+    });
+    const populated = await message.populate('senderId', 'username');
+    res.status(201).json(populated);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getMessages, sendMessage };

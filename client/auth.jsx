@@ -167,13 +167,15 @@ function LoginScreen({ nav }) {
   const [email, setEmail] = React.useState('');
   const [pwd, setPwd]     = React.useState('');
   const [remember, setRemember] = React.useState(true);
+  const [error, setError] = React.useState('');
   const valid = email.includes('@') && pwd.length >= 4;
 
   const submit = () => {
-    Api.auth.login(email).then((user) => {
+    setError('');
+    Api.auth.login(email, pwd).then((user) => {
       setUserId(user.id);
       nav.reset('search');
-    });
+    }).catch((err) => setError(err.message || 'Login failed'));
   };
 
   return (
@@ -239,8 +241,9 @@ function LoginScreen({ nav }) {
             fontFamily:'inherit',
             transition:'all .18s',
           }}>Sign in</button>
+        {error && <div style={{ textAlign: 'center', marginTop: 10, color: '#FF8080', fontSize: 12 }}>{error}</div>}
         <div style={{ textAlign: 'center', marginTop: 10, color: TH.dim2, fontSize: 11 }}>
-          Demo: menalu@partyup.com or noa@partyup.com · any password
+          Demo: menalu@partyup.com or noa@partyup.com · password "demo123"
         </div>
 
         <div style={{
@@ -286,15 +289,17 @@ function RegisterScreen({ nav }) {
     { name:'India' }, { name:'Singapore' }, { name:'Philippines' },
     { name:'Australia' }, { name:'New Zealand' }, { name:'South Africa' },
   ];
+  const [error, setError] = React.useState('');
   const valid = name.length >= 2 && email.includes('@') && pwd.length >= 6 && pwd === pwd2;
 
   const submit = () => {
+    setError('');
     Api.users.create({
-      name, region: country.name, platform, skillLevel, favoriteGames: favGameIds,
+      name, email, password: pwd, region: country.name, platform, skillLevel, favoriteGames: favGameIds,
     }).then((user) => {
       setUserId(user.id);
       nav.reset('search');
-    });
+    }).catch((err) => setError(err.message || 'Registration failed'));
   };
   // password strength
   const strength = Math.min(4, [
@@ -431,6 +436,7 @@ function RegisterScreen({ nav }) {
             opacity: valid ? 1 : 0.55,
             fontFamily:'inherit', transition:'all .18s',
           }}>Create account</button>
+        {error && <div style={{ textAlign: 'center', marginTop: 10, color: '#FF8080', fontSize: 12 }}>{error}</div>}
 
         <div style={{
           textAlign:'center', marginTop:'auto', paddingTop:22,

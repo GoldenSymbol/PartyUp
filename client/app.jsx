@@ -141,6 +141,16 @@ function App() {
     document.documentElement.style.setProperty('--accent', t.accent);
   }, [t.accent, t.bg]);
 
+  // Boot gate — fetch the public games+users catalogs once before the first
+  // real render, so synchronous lookups elsewhere (gameById/userById, the
+  // GAMES.map in RegisterScreen, etc.) never see stale/empty data on first paint.
+  const [booted, setBooted] = React.useState(false);
+  React.useEffect(() => {
+    Api.bootstrap()
+      .catch((err) => console.error('[bootstrap] failed to reach the API server', err))
+      .finally(() => setBooted(true));
+  }, []);
+
   // Logged-in user — drives host/regular permissions across session screens
   const [userId, setUserIdState] = React.useState(window.CURRENT_USER_ID || 'menalu');
   const setUserId = React.useCallback((id) => { window.CURRENT_USER_ID = id; setUserIdState(id); }, []);
@@ -200,6 +210,18 @@ function App() {
   const animation = (navDir === 'push' ? 'slideIn' : navDir === 'pop' ? 'slideInBack' : 'tabSwap') + ' .32s cubic-bezier(.2,.7,.2,1)';
   // NB: no fill-mode → transform reverts after animation so picker stacking-context is not trapped
 
+  if (!booted) {
+    return (
+      <div style={{
+        width: '100%', minHeight: '100vh', background: t.bg,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: '#fff', fontFamily: 'inherit', fontSize: 15,
+      }}>
+        Loading PartyUp…
+      </div>
+    );
+  }
+
   return (
     <UserCtx.Provider value={userCtxValue}>
     <FavCtx.Provider value={favCtxValue}>
@@ -230,28 +252,17 @@ function App() {
             options={['#0E1A3A','#0A0A12','#1B0E2E','#0E2A2A']}/>
         </TweakSection>
         <TweakSection title="Quick navigation">
+          {/* NB: no hardcoded game/session ids here anymore — those were mock
+              ids (e.g. 'valorant', 's1') that don't exist in the real backend's
+              MongoDB collections. Navigate via Search → a real game/session instead. */}
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
             <button onClick={()=>nav.reset('login')} style={tbtn}>Login</button>
             <button onClick={()=>nav.reset('register')} style={tbtn}>Register</button>
             <button onClick={()=>nav.reset('search')} style={tbtn}>Search</button>
-            <button onClick={()=>nav.push('console',{gameId:'valorant'})} style={tbtn}>Game · Valorant</button>
-            <button onClick={()=>nav.push('sessions',{gameId:'valorant'})} style={tbtn}>Sessions list</button>
-            <button onClick={()=>nav.push('sessiondetail',{sessionId:'s1'})} style={tbtn}>Session details</button>
-            <button onClick={()=>nav.push('create',{gameId:'valorant'})} style={tbtn}>Create session</button>
-            <button onClick={()=>nav.push('hostlive',{sessionId:'s1'})} style={tbtn}>Manage (host)</button>
+            <button onClick={()=>nav.push('sessions',{})} style={tbtn}>Sessions list</button>
             <button onClick={()=>nav.reset('mysessions')} style={tbtn}>My sessions</button>
             <button onClick={()=>nav.reset('stats')} style={tbtn}>Statistics</button>
             <button onClick={()=>nav.reset('profile')} style={tbtn}>My profile</button>
-            <button onClick={()=>nav.push('joined',{sessionId:'s2'})} style={tbtn}>Joined ✓</button>
-          </div>
-        </TweakSection>
-        <TweakSection title="Demo login as">
-          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
-            {USERS.map(u => (
-              <button key={u.id} onClick={()=>{ setUserId(u.id); nav.reset('search'); }} style={tbtn}>
-                {u.name} {u.role === 'host' ? '(host)' : ''}
-              </button>
-            ))}
           </div>
         </TweakSection>
       </TweaksPanel>

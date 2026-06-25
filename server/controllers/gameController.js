@@ -1,9 +1,11 @@
 const Game = require('../models/Game');
 
-// GET /api/games
+// GET /api/games?q=
 async function listGames(req, res, next) {
   try {
-    const games = await Game.find();
+    const { q } = req.query;
+    const filter = q ? { name: { $regex: q, $options: 'i' } } : {};
+    const games = await Game.find(filter);
     res.json(games);
   } catch (err) {
     next(err);

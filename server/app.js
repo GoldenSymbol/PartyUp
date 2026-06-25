@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 
+const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const gameRoutes = require('./routes/gameRoutes');
 const sessionRoutes = require('./routes/sessionRoutes');
@@ -20,6 +21,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'partyup-server', time: new Date().toISOString() });
 });
 
+app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/games', gameRoutes);
 app.use('/api/sessions', sessionRoutes);
